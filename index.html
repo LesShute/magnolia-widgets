@@ -138,6 +138,7 @@
     <div id="app">
         <div class="loading">Loading recipients...</div>
     </div>
+    <div id="debug" style="font-size:10px; color:#999; padding:8px; background:#f5f5f5; margin-top:8px; display:none;"></div>
 
     <script>
         // ===========================================
@@ -160,27 +161,80 @@
         let selectedEmails = new Set();
 
         // ===========================================
+        // Debug Helper
+        // ===========================================
+        function debug(msg) {
+            console.log("[SmartEmail] " + msg);
+            var d = document.getElementById('debug');
+            if (d) {
+                d.style.display = 'block';
+                d.innerHTML += msg + '<br>';
+            }
+        }
+
+        // ===========================================
         // Initialization
         // ===========================================
+        let initTimeout = null;
+        debug("Widget script loaded, checking ZOHO object...");
+        debug("ZOHO exists: " + (typeof ZOHO !== 'undefined'));
+        debug("ZOHO.embeddedApp exists: " + (typeof ZOHO !== 'undefined' && typeof ZOHO.embeddedApp !== 'undefined'));
+        
         ZOHO.embeddedApp.on("PageLoad", function(data) {
-            console.log("[SmartEmail] PageLoad event:", data);
+            debug("PageLoad event received: " + JSON.stringify(data).substring(0, 200));
+            clearTimeout(initTimeout);
             
-            recordId = data.EntityId;
+            // Handle different data formats
+            recordId = data.EntityId || (data.Entity && data.Entity[0] && data.Entity[0].id);
             const entity = data.Entity || 'Potentials';
             
+            if (!recordId && Array.isArray(data.Entity)) {
+                recordId = data.Entity[0].id;
+            }
+            
             if (!recordId) {
-                showError("No record ID found. Please use this widget on a Referral record.");
+                // Try alternate method for Related List widgets
+                console.log("[SmartEmail] No record ID in PageLoad, trying alternate method...");
+                ZOHO.CRM.UI.Record.getParams().then(function(params) {
+                    console.log("[SmartEmail] getParams result:", params);
+                    if (params && params.Entity && params.EntityId) {
+                        recordId = params.EntityId;
+                        loadRecordData(params.Entity, recordId);
+                    } else {
+                        showError("No record context found. Please refresh the page.");
+                    }
+                }).catch(function(err) {
+                    console.error("[SmartEmail] getParams error:", err);
+                    showError("Could not get record context. Error: " + (err.message || err));
+                });
                 return;
             }
 
             loadRecordData(entity, recordId);
         });
 
+        debug("Calling ZOHO.embeddedApp.init()...");
         ZOHO.embeddedApp.init().then(function() {
-            console.log("[SmartEmail] Widget initialized successfully");
+            debug("Widget initialized successfully!");
+            // Set timeout in case PageLoad doesn't fire
+            initTimeout = setTimeout(function() {
+                debug("PageLoad timeout (3s), trying getParams...");
+                ZOHO.CRM.UI.Record.getParams().then(function(params) {
+                    debug("getParams result: " + JSON.stringify(params).substring(0, 200));
+                    if (params && params.Entity && params.EntityId) {
+                        recordId = params.EntityId;
+                        loadRecordData(params.Entity, recordId);
+                    } else {
+                        showError("Widget loaded but no record context. Try refreshing the page.");
+                    }
+                }).catch(function(err) {
+                    debug("getParams error: " + (err.message || err));
+                    showError("Could not connect to Zoho CRM. Please refresh.");
+                });
+            }, 3000);
         }).catch(function(err) {
-            console.error("[SmartEmail] Widget init error:", err);
-            showError("Failed to initialize widget. Please refresh the page.");
+            debug("Widget init error: " + (err.message || err));
+            showError("Failed to initialize widget: " + (err.message || err));
         });
 
         // ===========================================
