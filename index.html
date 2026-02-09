@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Email Compose - Magnolia</title>
+    <!-- 
+        Smart Email Compose Widget for Zoho CRM
+        © 2026 Kairos Kinetics - Magnolia Project
+        
+        Security Notes:
+        - This widget only communicates with Zoho CRM APIs
+        - No external data transmission
+        - No credentials stored in code
+        - Runs in sandboxed iframe within Zoho CRM
+    -->
+    <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbeddedAppSDK.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        body {
+            margin: 0;
+            padding: 12px;
+            background: #fff;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        h3 {
+            margin: 0;
+            color: #333;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .recipient-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .recipient-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+            font-size: 13px;
+        }
+        .recipient-item:hover {
+            background: #e9ecef;
+        }
+        .recipient-item.disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .recipient-item.disabled:hover {
+            background: #f8f9fa;
+        }
+        .recipient-item input[type="checkbox"] {
+            margin-right: 8px;
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+        .recipient-item.disabled input[type="checkbox"] {
+            cursor: not-allowed;
+        }
+        .recipient-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .recipient-role {
+            font-weight: 600;
+            color: #333;
+            font-size: 12px;
+        }
+        .recipient-email {
+            color: #666;
+            font-size: 11px;
+            margin-top: 1px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .no-email {
+            color: #999;
+            font-style: italic;
+        }
+        .btn {
+            display: inline-block;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-primary {
+            background: #1976d2;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #1565c0;
+        }
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 13px;
+        }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="loading">Loading recipients...</div>
+    </div>
+
+    <script>
+        // ===========================================
+        // Configuration - Email fields on Referral records
+        // ===========================================
+        const EMAIL_FIELDS = [
+            { field: 'Adjuster_Email', role: 'Adjuster' },
+            { field: 'Email', role: 'Claimant' },
+            { field: 'Physician_Email', role: 'Physician' },
+            { field: 'NCM_Email', role: 'NCM' },
+            { field: 'Prov_Email', role: 'Provider' },
+            { field: 'Atty_Email', role: 'Attorney' }
+        ];
+
+        // ===========================================
+        // State
+        // ===========================================
+        let recordData = null;
+        let recordId = null;
+        let selectedEmails = new Set();
+
+        // ===========================================
+        // Initialization
+        // ===========================================
+        ZOHO.embeddedApp.on("PageLoad", function(data) {
+            console.log("[SmartEmail] PageLoad event:", data);
+            
+            recordId = data.EntityId;
+            const entity = data.Entity || 'Potentials';
+            
+            if (!recordId) {
+                showError("No record ID found. Please use this widget on a Referral record.");
+                return;
+            }
+
+            loadRecordData(entity, recordId);
+        });
+
+        ZOHO.embeddedApp.init().then(function() {
+            console.log("[SmartEmail] Widget initialized successfully");
+        }).catch(function(err) {
+            console.error("[SmartEmail] Widget init error:", err);
+            showError("Failed to initialize widget. Please refresh the page.");
+        });
+
+        // ===========================================
+        // Data Loading
+        // ===========================================
+        function loadRecordData(entity, id) {
+            ZOHO.CRM.API.getRecord({
+                Entity: entity,
+                RecordID: id
+            }).then(function(response) {
+                console.log("[SmartEmail] Record loaded:", response);
+                if (response.data && response.data.length > 0) {
+                    recordData = response.data[0];
+                    recordId = recordData.id;
+                    renderRecipients();
+                } else {
+                    showError("Could not load record data.");
+                }
+            }).catch(function(error) {
+                console.error("[SmartEmail] Error fetching record:", error);
+                showError("Error loading record. Please refresh and try again.");
+            });
+        }
+
+        // ===========================================
+        // UI Rendering
+        // ===========================================
+        function renderRecipients() {
+            const app = document.getElementById('app');
+            
+            let html = '<div class="header">';
+            html += '<h3>Select Email Recipients</h3>';
+            html += '<button class="btn btn-primary btn-sm" id="composeBtn" onclick="openCompose()">Compose Email</button>';
+            html += '</div>';
+            
+            html += '<div class="recipient-grid">';
+
+            EMAIL_FIELDS.forEach(function(config) {
+                const email = recordData[config.field];
+                const hasEmail = email && email.trim() !== '';
+                const checked = hasEmail ? 'checked' : '';
+                const disabled = hasEmail ? '' : 'disabled';
+                const itemClass = hasEmail ? 'recipient-item' : 'recipient-item disabled';
+
+                if (hasEmail) {
+                    selectedEmails.add(email);
+                }
+
+                html += '<div class="' + itemClass + '">';
+                html += '<input type="checkbox" id="chk_' + config.field + '" ';
+                html += 'data-email="' + (email || '') + '" ';
+                html += checked + ' ' + disabled + ' ';
+                html += 'onchange="toggleEmail(this)">';
+                html += '<div class="recipient-info">';
+                html += '<div class="recipient-role">' + config.role + '</div>';
+                html += '<div class="recipient-email ' + (hasEmail ? '' : 'no-email') + '">';
+                html += hasEmail ? email : 'No email';
+                html += '</div></div></div>';
+            });
+
+            html += '</div>';
+            app.innerHTML = html;
+            updateComposeButton();
+        }
+
+        // ===========================================
+        // Event Handlers
+        // ===========================================
+        function toggleEmail(checkbox) {
+            const email = checkbox.dataset.email;
+            if (checkbox.checked) {
+                selectedEmails.add(email);
+            } else {
+                selectedEmails.delete(email);
+            }
+            updateComposeButton();
+        }
+
+        function updateComposeButton() {
+            const btn = document.getElementById('composeBtn');
+            if (!btn) return;
+            const count = selectedEmails.size;
+            btn.disabled = count === 0;
+            btn.textContent = count > 0 ? 'Compose Email (' + count + ')' : 'Compose Email';
+        }
+
+        function openCompose() {
+            if (selectedEmails.size === 0) {
+                alert("Please select at least one recipient.");
+                return;
+            }
+
+            const emailList = Array.from(selectedEmails);
+            const btn = document.getElementById('composeBtn');
+            btn.textContent = 'Opening...';
+            btn.disabled = true;
+            
+            // Use Zoho CRM's native email compose
+            ZOHO.CRM.UI.Record.sendEmail({
+                Entity: "Potentials",
+                RecordID: recordId,
+                To: emailList
+            }).then(function(response) {
+                console.log("[SmartEmail] Email compose opened:", response);
+                resetButton();
+            }).catch(function(error) {
+                console.error("[SmartEmail] Compose error, using fallback:", error);
+                // Fallback: mailto link
+                const subject = encodeURIComponent('Re: ' + (recordData.Deal_Name || 'Referral'));
+                const mailto = 'mailto:' + emailList.join(',') + '?subject=' + subject;
+                window.open(mailto, '_blank');
+                resetButton();
+            });
+        }
+
+        function resetButton() {
+            const btn = document.getElementById('composeBtn');
+            if (btn) {
+                btn.textContent = 'Compose Email (' + selectedEmails.size + ')';
+                btn.disabled = selectedEmails.size === 0;
+            }
+        }
+
+        function showError(message) {
+            document.getElementById('app').innerHTML = '<div class="error">' + message + '</div>';
+        }
+    </script>
+</body>
+</html>
