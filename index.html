@@ -4,27 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Smart Email Compose - Magnolia</title>
-    <!-- 
-        Smart Email Compose Widget for Zoho CRM
-        © 2026 Kairos Kinetics - Magnolia Project
-        
-        Security Notes:
-        - This widget only communicates with Zoho CRM APIs
-        - No external data transmission
-        - No credentials stored in code
-        - Runs in sandboxed iframe within Zoho CRM
-    -->
     <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
     <style>
         * {
             box-sizing: border-box;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
-        body {
-            margin: 0;
-            padding: 12px;
-            background: #fff;
-        }
+        body { margin: 0; padding: 12px; background: #fff; }
         .header {
             display: flex;
             justify-content: space-between;
@@ -33,12 +19,7 @@
             flex-wrap: wrap;
             gap: 8px;
         }
-        h3 {
-            margin: 0;
-            color: #333;
-            font-size: 14px;
-            font-weight: 600;
-        }
+        h3 { margin: 0; color: #333; font-size: 14px; font-weight: 600; }
         .recipient-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -54,96 +35,28 @@
             border: 1px solid #e9ecef;
             font-size: 13px;
         }
-        .recipient-item:hover {
-            background: #e9ecef;
-        }
-        .recipient-item.disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        .recipient-item.disabled:hover {
-            background: #f8f9fa;
-        }
-        .recipient-item input[type="checkbox"] {
-            margin-right: 8px;
-            width: 16px;
-            height: 16px;
-            cursor: pointer;
-        }
-        .recipient-item.disabled input[type="checkbox"] {
-            cursor: not-allowed;
-        }
-        .recipient-info {
-            flex: 1;
-            min-width: 0;
-        }
-        .recipient-role {
-            font-weight: 600;
-            color: #333;
-            font-size: 12px;
-        }
-        .recipient-email {
-            color: #666;
-            font-size: 11px;
-            margin-top: 1px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .no-email {
-            color: #999;
-            font-style: italic;
-        }
-        .btn {
-            display: inline-block;
-            padding: 8px 16px;
-            font-size: 13px;
-            font-weight: 500;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .btn-primary {
-            background: #1976d2;
-            color: white;
-        }
-        .btn-primary:hover {
-            background: #1565c0;
-        }
-        .btn-primary:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-        .btn-sm {
-            padding: 6px 12px;
-            font-size: 12px;
-        }
-        .loading {
-            text-align: center;
-            padding: 20px;
-            color: #666;
-            font-size: 13px;
-        }
-        .error {
-            background: #ffebee;
-            color: #c62828;
-            padding: 10px;
-            border-radius: 4px;
-            font-size: 13px;
-        }
+        .recipient-item:hover { background: #e9ecef; }
+        .recipient-item.disabled { opacity: 0.4; cursor: not-allowed; }
+        .recipient-item input[type="checkbox"] { margin-right: 8px; width: 16px; height: 16px; cursor: pointer; }
+        .recipient-info { flex: 1; min-width: 0; }
+        .recipient-role { font-weight: 600; color: #333; font-size: 12px; }
+        .recipient-email { color: #666; font-size: 11px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .no-email { color: #999; font-style: italic; }
+        .btn { display: inline-block; padding: 8px 16px; font-size: 13px; font-weight: 500; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-primary { background: #1976d2; color: white; }
+        .btn-primary:hover { background: #1565c0; }
+        .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+        .loading { text-align: center; padding: 20px; color: #666; font-size: 13px; }
+        .error { background: #ffebee; color: #c62828; padding: 10px; border-radius: 4px; font-size: 13px; }
+        #debug { font-size: 11px; color: #666; padding: 10px; background: #f0f0f0; margin-top: 10px; border-radius: 4px; font-family: monospace; white-space: pre-wrap; }
     </style>
 </head>
 <body>
-    <div id="app">
-        <div class="loading">Loading recipients...</div>
-    </div>
-    <div id="debug" style="font-size:10px; color:#999; padding:8px; background:#f5f5f5; margin-top:8px; display:none;"></div>
+    <div id="app"><div class="loading">Loading recipients...</div></div>
+    <div id="debug"></div>
 
     <script>
-        // ===========================================
-        // Configuration - Email fields on Referral records
-        // ===========================================
+        // Config
         const EMAIL_FIELDS = [
             { field: 'Adjuster_Email', role: 'Adjuster' },
             { field: 'Email', role: 'Claimant' },
@@ -153,213 +66,148 @@
             { field: 'Atty_Email', role: 'Attorney' }
         ];
 
-        // ===========================================
-        // State
-        // ===========================================
         let recordData = null;
         let recordId = null;
         let selectedEmails = new Set();
 
-        // ===========================================
-        // Debug Helper
-        // ===========================================
-        function debug(msg) {
+        // Debug output
+        function log(msg) {
             console.log("[SmartEmail] " + msg);
-            var d = document.getElementById('debug');
-            if (d) {
-                d.style.display = 'block';
-                d.innerHTML += msg + '<br>';
+            document.getElementById('debug').innerHTML += msg + '\n';
+        }
+
+        // Start debugging immediately
+        log("=== Widget Debug ===");
+        log("Time: " + new Date().toLocaleTimeString());
+        log("URL: " + window.location.href.substring(0, 50) + "...");
+        log("In iframe: " + (window.self !== window.top));
+        log("ZOHO type: " + typeof ZOHO);
+        
+        if (typeof ZOHO === 'undefined') {
+            log("ERROR: ZOHO is undefined!");
+            log("Possible causes:");
+            log("  1. SDK script failed to load");
+            log("  2. SDK blocked by browser");
+            log("  3. Not running in Zoho context");
+            
+            // Check if script tag exists
+            var sdkScript = document.querySelector('script[src*="zwidgets"]');
+            log("SDK script tag found: " + (sdkScript ? "YES" : "NO"));
+            if (sdkScript) log("SDK src: " + sdkScript.src);
+        } else {
+            log("ZOHO object exists!");
+            log("ZOHO.embeddedApp: " + (typeof ZOHO.embeddedApp));
+            
+            if (typeof ZOHO.embeddedApp !== 'undefined') {
+                log("Setting up PageLoad listener...");
+                
+                ZOHO.embeddedApp.on("PageLoad", function(data) {
+                    log("PageLoad fired! Data: " + JSON.stringify(data).substring(0, 100));
+                    recordId = data.EntityId || (data.Entity && data.Entity[0] && data.Entity[0].id);
+                    if (recordId) {
+                        loadRecordData("Potentials", recordId);
+                    } else {
+                        log("No recordId in PageLoad, trying getParams...");
+                        tryGetParams();
+                    }
+                });
+
+                log("Calling init()...");
+                ZOHO.embeddedApp.init().then(function() {
+                    log("init() SUCCESS!");
+                }).catch(function(err) {
+                    log("init() ERROR: " + err);
+                });
+            } else {
+                log("ERROR: ZOHO.embeddedApp is undefined");
             }
         }
 
-        // ===========================================
-        // Initialization
-        // ===========================================
-        let initTimeout = null;
-        debug("Widget script loaded, checking ZOHO object...");
-        debug("ZOHO exists: " + (typeof ZOHO !== 'undefined'));
-        debug("ZOHO.embeddedApp exists: " + (typeof ZOHO !== 'undefined' && typeof ZOHO.embeddedApp !== 'undefined'));
-        
-        ZOHO.embeddedApp.on("PageLoad", function(data) {
-            debug("PageLoad event received: " + JSON.stringify(data).substring(0, 200));
-            clearTimeout(initTimeout);
-            
-            // Handle different data formats
-            recordId = data.EntityId || (data.Entity && data.Entity[0] && data.Entity[0].id);
-            const entity = data.Entity || 'Potentials';
-            
-            if (!recordId && Array.isArray(data.Entity)) {
-                recordId = data.Entity[0].id;
-            }
-            
-            if (!recordId) {
-                // Try alternate method for Related List widgets
-                console.log("[SmartEmail] No record ID in PageLoad, trying alternate method...");
-                ZOHO.CRM.UI.Record.getParams().then(function(params) {
-                    console.log("[SmartEmail] getParams result:", params);
-                    if (params && params.Entity && params.EntityId) {
-                        recordId = params.EntityId;
-                        loadRecordData(params.Entity, recordId);
-                    } else {
-                        showError("No record context found. Please refresh the page.");
-                    }
-                }).catch(function(err) {
-                    console.error("[SmartEmail] getParams error:", err);
-                    showError("Could not get record context. Error: " + (err.message || err));
-                });
-                return;
-            }
-
-            loadRecordData(entity, recordId);
-        });
-
-        debug("Calling ZOHO.embeddedApp.init()...");
-        ZOHO.embeddedApp.init().then(function() {
-            debug("Widget initialized successfully!");
-            // Set timeout in case PageLoad doesn't fire
-            initTimeout = setTimeout(function() {
-                debug("PageLoad timeout (3s), trying getParams...");
-                ZOHO.CRM.UI.Record.getParams().then(function(params) {
-                    debug("getParams result: " + JSON.stringify(params).substring(0, 200));
-                    if (params && params.Entity && params.EntityId) {
-                        recordId = params.EntityId;
-                        loadRecordData(params.Entity, recordId);
-                    } else {
-                        showError("Widget loaded but no record context. Try refreshing the page.");
-                    }
-                }).catch(function(err) {
-                    debug("getParams error: " + (err.message || err));
-                    showError("Could not connect to Zoho CRM. Please refresh.");
-                });
-            }, 3000);
-        }).catch(function(err) {
-            debug("Widget init error: " + (err.message || err));
-            showError("Failed to initialize widget: " + (err.message || err));
-        });
-
-        // ===========================================
-        // Data Loading
-        // ===========================================
-        function loadRecordData(entity, id) {
-            ZOHO.CRM.API.getRecord({
-                Entity: entity,
-                RecordID: id
-            }).then(function(response) {
-                console.log("[SmartEmail] Record loaded:", response);
-                if (response.data && response.data.length > 0) {
-                    recordData = response.data[0];
-                    recordId = recordData.id;
-                    renderRecipients();
-                } else {
-                    showError("Could not load record data.");
+        function tryGetParams() {
+            ZOHO.CRM.UI.Record.getParams().then(function(params) {
+                log("getParams: " + JSON.stringify(params).substring(0, 100));
+                if (params && params.EntityId) {
+                    recordId = params.EntityId;
+                    loadRecordData(params.Entity || "Potentials", recordId);
                 }
-            }).catch(function(error) {
-                console.error("[SmartEmail] Error fetching record:", error);
-                showError("Error loading record. Please refresh and try again.");
+            }).catch(function(err) {
+                log("getParams error: " + err);
             });
         }
 
-        // ===========================================
-        // UI Rendering
-        // ===========================================
+        function loadRecordData(entity, id) {
+            log("Loading record: " + entity + "/" + id);
+            ZOHO.CRM.API.getRecord({ Entity: entity, RecordID: id })
+            .then(function(response) {
+                log("Record loaded!");
+                if (response.data && response.data.length > 0) {
+                    recordData = response.data[0];
+                    renderRecipients();
+                } else {
+                    showError("No record data returned");
+                }
+            }).catch(function(err) {
+                log("getRecord error: " + err);
+                showError("Error loading record: " + err);
+            });
+        }
+
         function renderRecipients() {
-            const app = document.getElementById('app');
-            
-            let html = '<div class="header">';
-            html += '<h3>Select Email Recipients</h3>';
-            html += '<button class="btn btn-primary btn-sm" id="composeBtn" onclick="openCompose()">Compose Email</button>';
-            html += '</div>';
-            
+            let html = '<div class="header"><h3>Select Recipients</h3>';
+            html += '<button class="btn btn-primary" id="composeBtn" onclick="openCompose()">Compose Email</button></div>';
             html += '<div class="recipient-grid">';
 
             EMAIL_FIELDS.forEach(function(config) {
                 const email = recordData[config.field];
                 const hasEmail = email && email.trim() !== '';
-                const checked = hasEmail ? 'checked' : '';
-                const disabled = hasEmail ? '' : 'disabled';
-                const itemClass = hasEmail ? 'recipient-item' : 'recipient-item disabled';
+                if (hasEmail) selectedEmails.add(email);
 
-                if (hasEmail) {
-                    selectedEmails.add(email);
-                }
-
-                html += '<div class="' + itemClass + '">';
-                html += '<input type="checkbox" id="chk_' + config.field + '" ';
-                html += 'data-email="' + (email || '') + '" ';
-                html += checked + ' ' + disabled + ' ';
-                html += 'onchange="toggleEmail(this)">';
+                html += '<div class="recipient-item' + (hasEmail ? '' : ' disabled') + '">';
+                html += '<input type="checkbox" data-email="' + (email || '') + '" ';
+                html += (hasEmail ? 'checked' : 'disabled') + ' onchange="toggleEmail(this)">';
                 html += '<div class="recipient-info">';
                 html += '<div class="recipient-role">' + config.role + '</div>';
-                html += '<div class="recipient-email ' + (hasEmail ? '' : 'no-email') + '">';
-                html += hasEmail ? email : 'No email';
-                html += '</div></div></div>';
+                html += '<div class="recipient-email">' + (hasEmail ? email : 'No email') + '</div>';
+                html += '</div></div>';
             });
 
             html += '</div>';
-            app.innerHTML = html;
+            document.getElementById('app').innerHTML = html;
             updateComposeButton();
         }
 
-        // ===========================================
-        // Event Handlers
-        // ===========================================
-        function toggleEmail(checkbox) {
-            const email = checkbox.dataset.email;
-            if (checkbox.checked) {
-                selectedEmails.add(email);
-            } else {
-                selectedEmails.delete(email);
-            }
+        function toggleEmail(cb) {
+            if (cb.checked) selectedEmails.add(cb.dataset.email);
+            else selectedEmails.delete(cb.dataset.email);
             updateComposeButton();
         }
 
         function updateComposeButton() {
-            const btn = document.getElementById('composeBtn');
-            if (!btn) return;
-            const count = selectedEmails.size;
-            btn.disabled = count === 0;
-            btn.textContent = count > 0 ? 'Compose Email (' + count + ')' : 'Compose Email';
+            var btn = document.getElementById('composeBtn');
+            if (btn) {
+                btn.disabled = selectedEmails.size === 0;
+                btn.textContent = 'Compose Email' + (selectedEmails.size > 0 ? ' (' + selectedEmails.size + ')' : '');
+            }
         }
 
         function openCompose() {
-            if (selectedEmails.size === 0) {
-                alert("Please select at least one recipient.");
-                return;
-            }
-
-            const emailList = Array.from(selectedEmails);
-            const btn = document.getElementById('composeBtn');
-            btn.textContent = 'Opening...';
-            btn.disabled = true;
+            if (selectedEmails.size === 0) return;
+            var emails = Array.from(selectedEmails);
+            log("Opening compose for: " + emails.join(', '));
             
-            // Use Zoho CRM's native email compose
             ZOHO.CRM.UI.Record.sendEmail({
                 Entity: "Potentials",
                 RecordID: recordId,
-                To: emailList
-            }).then(function(response) {
-                console.log("[SmartEmail] Email compose opened:", response);
-                resetButton();
-            }).catch(function(error) {
-                console.error("[SmartEmail] Compose error, using fallback:", error);
-                // Fallback: mailto link
-                const subject = encodeURIComponent('Re: ' + (recordData.Deal_Name || 'Referral'));
-                const mailto = 'mailto:' + emailList.join(',') + '?subject=' + subject;
-                window.open(mailto, '_blank');
-                resetButton();
+                To: emails
+            }).catch(function(err) {
+                log("sendEmail error, using mailto fallback");
+                window.open('mailto:' + emails.join(','), '_blank');
             });
         }
 
-        function resetButton() {
-            const btn = document.getElementById('composeBtn');
-            if (btn) {
-                btn.textContent = 'Compose Email (' + selectedEmails.size + ')';
-                btn.disabled = selectedEmails.size === 0;
-            }
-        }
-
-        function showError(message) {
-            document.getElementById('app').innerHTML = '<div class="error">' + message + '</div>';
+        function showError(msg) {
+            document.getElementById('app').innerHTML = '<div class="error">' + msg + '</div>';
+            log("ERROR: " + msg);
         }
     </script>
 </body>
