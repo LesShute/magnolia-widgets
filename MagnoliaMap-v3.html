@@ -185,14 +185,21 @@
             log('Fetching providers from CustomModule13...');
             
             try {
-                // Try CustomModule13 (actual API name for Providers)
+                // Fetch providers - removed sort_order to avoid 400 errors
                 const response = await ZOHO.CRM.API.getAllRecords({
                     Entity: "CustomModule13", 
-                    sort_order: "asc", 
                     per_page: 200
                 });
                 
-                log('Provider response: ' + JSON.stringify(response).substring(0, 200));
+                log('Provider response keys: ' + Object.keys(response || {}).join(', '));
+                
+                // Check for API error in response
+                if(response.status && response.status === 'error') {
+                    log('API returned error: ' + JSON.stringify(response));
+                    throw new Error(response.message || 'API error');
+                }
+                
+                log('Provider response: ' + JSON.stringify(response).substring(0, 300));
                 
                 if(response.data){
                     allProviders = response.data;
@@ -239,8 +246,18 @@
                     document.getElementById('loading').innerHTML = "No providers found.";
                 }
             } catch (e) {
-                log('ERROR fetching providers: ' + e);
-                document.getElementById('loading').innerHTML = "Error loading providers: " + e;
+                // Better error logging
+                var errMsg = e;
+                if(typeof e === 'object') {
+                    errMsg = JSON.stringify(e, null, 2);
+                    if(e.message) errMsg = e.message;
+                    if(e.responseText) errMsg = e.responseText;
+                }
+                log('ERROR fetching providers: ' + errMsg);
+                log('Error type: ' + typeof e);
+                if(e && e.status) log('Error status: ' + e.status);
+                if(e && e.code) log('Error code: ' + e.code);
+                document.getElementById('loading').innerHTML = "Error loading providers. Check debug log.";
             }
         }
 
