@@ -182,12 +182,12 @@
 
         async function fetchProviders() {
             document.getElementById('loading').innerHTML = "Fetching providers...";
-            log('v3.1 - Fetching providers from CustomModule13...');
+            log('v3.2 - Fetching providers...');
             
             try {
-                // Fetch providers - removed sort_order to avoid 400 errors
+                // Try "Providers" as entity name (display name sometimes works)
                 const response = await ZOHO.CRM.API.getAllRecords({
-                    Entity: "CustomModule13", 
+                    Entity: "Providers", 
                     per_page: 200
                 });
                 
