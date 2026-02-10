@@ -185,7 +185,7 @@
             
             // Get patient's state for filtering
             let patientState = currentReferral.Claimant_State || '';
-            log('v3.10 - Fetching providers in state: "' + patientState + '"');
+            log('v3.11 - Fetching providers in state: "' + patientState + '"');
             
             // State abbreviation mapping
             const stateAbbrev = {
@@ -413,23 +413,34 @@
         }
 
         function assignProvider(id, name) {
-            if(!confirm(`Assign "${name}" to this referral?`)) return;
+            const existingProvider = currentReferral.Provider_Name;
+            const actionText = existingProvider ? 'REASSIGN' : 'Assign';
             
-            log('Assigning provider: ' + id);
+            if(!confirm(`${actionText} "${name}" to this referral?`)) return;
+            
+            log('Assigning provider: ' + id + ' (existing: ' + JSON.stringify(existingProvider) + ')');
+            
+            // Use record ID format for lookup field update
+            const updateData = {
+                "id": currentReferral.id,
+                "Provider_Name": id,  // Try just the ID string for updates
+                "Stage": "Scheduled"
+            };
+            
+            log('Update payload: ' + JSON.stringify(updateData));
+            
             ZOHO.CRM.API.updateRecord({
                 Entity: "Potentials",
-                APIData: {
-                    "id": currentReferral.id,
-                    "Provider_Name": {"id": id},  // Lookup field needs object format
-                    "Stage": "Scheduled"
-                }
+                APIData: updateData,
+                Trigger: ["workflow"]  // Trigger workflows on update
             }).then(function(data) {
                 log('Assign success: ' + JSON.stringify(data));
                 alert("✅ Assigned " + name + "!\n\nStage updated to 'Scheduled'.");
-                location.reload();
+                // Force full page reload to refresh lookup field display
+                window.top.location.reload();
             }).catch(function(err) {
                 log('Assign ERROR: ' + JSON.stringify(err));
-                alert("❌ Error assigning provider.");
+                alert("❌ Error assigning provider: " + (err.message || JSON.stringify(err)));
             });
         }
 
