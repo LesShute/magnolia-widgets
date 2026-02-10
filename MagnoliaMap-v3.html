@@ -185,7 +185,7 @@
             
             // Get patient's state for filtering
             let patientState = currentReferral.Claimant_State || '';
-            log('v3.5 - Fetching providers in state: "' + patientState + '"');
+            log('v3.6 - Fetching providers in state: "' + patientState + '"');
             
             // State abbreviation mapping
             const stateAbbrev = {
@@ -270,11 +270,14 @@
                     
                     // Show referral's service type need
                     if(referralServiceType) {
-                        document.getElementById('referralNeed').style.display = 'block';
-                        document.getElementById('referralServiceDisplay').innerText = referralServiceType;
+                        var needEl = document.getElementById('referralNeed');
+                        var dispEl = document.getElementById('referralServiceDisplay');
+                        if(needEl) needEl.style.display = 'block';
+                        if(dispEl) dispEl.innerText = referralServiceType;
                     }
                     
-                    document.getElementById('loading').style.display = 'none';
+                    var loadingEl = document.getElementById('loading');
+                    if(loadingEl) loadingEl.style.display = 'none';
                 } else {
                     log('No provider data returned');
                     document.getElementById('loading').innerHTML = "No providers found.";
