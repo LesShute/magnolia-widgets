@@ -185,7 +185,7 @@
             
             // Get patient's state for filtering
             let patientState = currentReferral.Claimant_State || '';
-            log('v3.7 - Fetching providers in state: "' + patientState + '"');
+            log('v3.8 - Fetching providers in state: "' + patientState + '"');
             
             // State abbreviation mapping
             const stateAbbrev = {
@@ -214,7 +214,7 @@
                     // Use COQL to filter by state (much more efficient)
                     log('Using COQL query for state: ' + patientState);
                     response = await ZOHO.CRM.API.coql({
-                        select_query: `select Name, Provider_Contract_Status, Location_Services_Offered, Provider_Latitude, Provider_Longitude, Provider_Phone, Provider_Address_Street, Provider_Address_City, Provider_Address_State, Provider_Address_Zip from Providers where Provider_Address_State = '${patientState}'`
+                        select_query: `select Name, Provider_Contract_Status, Location_Services_Offered, Provider_Latitude, Provider_Longitude, Provider_Phone, Provider_Address_City, Provider_Address_State from Providers where Provider_Address_State = '${patientState}'`
                     });
                 } else {
                     // Fallback: get all (limited to 200)
@@ -373,12 +373,10 @@
 
                 const serviceTypeDisplay = serviceTypes.join(', ') || 'Not specified';
                 
-                // Build address string
+                // Build address string (city, state for now)
                 const addressParts = [
-                    provider.Provider_Address_Street,
                     provider.Provider_Address_City,
-                    provider.Provider_Address_State,
-                    provider.Provider_Address_Zip
+                    provider.Provider_Address_State
                 ].filter(Boolean);
                 const addressDisplay = addressParts.join(', ') || '';
                 
