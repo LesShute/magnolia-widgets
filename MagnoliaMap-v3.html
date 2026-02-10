@@ -185,7 +185,7 @@
             
             // Get patient's state for filtering
             let patientState = currentReferral.Claimant_State || '';
-            log('v3.9 - Fetching providers in state: "' + patientState + '"');
+            log('v3.10 - Fetching providers in state: "' + patientState + '"');
             
             // State abbreviation mapping
             const stateAbbrev = {
@@ -266,7 +266,11 @@
                     log('Providers with coordinates: ' + withCoords);
                     
                     filterAndPlotProviders();
-                    createFilterCheckboxes();
+                    
+                    // Retry filter creation (Google Maps controls may take time to appear in DOM)
+                    setTimeout(function() {
+                        createFilterCheckboxes();
+                    }, 100);
                     
                     // Show referral's service type need
                     if(referralServiceType) {
@@ -416,15 +420,15 @@
                 Entity: "Potentials",
                 APIData: {
                     "id": currentReferral.id,
-                    "Provider_Name": id,
+                    "Provider_Name": {"id": id},  // Lookup field needs object format
                     "Stage": "Scheduled"
                 }
             }).then(function(data) {
-                log('Assign success');
+                log('Assign success: ' + JSON.stringify(data));
                 alert("✅ Assigned " + name + "!\n\nStage updated to 'Scheduled'.");
                 location.reload();
             }).catch(function(err) {
-                log('Assign ERROR: ' + err);
+                log('Assign ERROR: ' + JSON.stringify(err));
                 alert("❌ Error assigning provider.");
             });
         }
