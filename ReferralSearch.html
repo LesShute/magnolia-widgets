@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Magnolia Referral Search</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #f5f7fa;
+            overflow-y: auto;
+        }
+        .search-container {
+            background: white;
+            padding: 28px;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            max-width: 1200px;
+            margin: 20px auto;
+        }
+        h2 {
+            margin: 0 0 24px 0;
+            color: #1a202c;
+            font-size: 24px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+        }
+        h2::before {
+            content: "🔍";
+            margin-right: 10px;
+            font-size: 20px;
+        }
+        .search-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+        .field-group {
+            display: flex;
+            flex-direction: column;
+        }
+        label {
+            margin-bottom: 8px;
+            color: #4a5568;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        input {
+            padding: 10px 14px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.2s;
+            outline: none;
+        }
+        input:focus {
+            border-color: #3182ce;
+            box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
+        }
+        .button-group {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 24px;
+        }
+        button {
+            padding: 10px 24px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            font-size: 14px;
+        }
+        .btn-search {
+            background: #3182ce;
+            color: white;
+        }
+        .btn-search:hover {
+            background: #2c5282;
+            transform: translateY(-1px);
+        }
+        .btn-clear {
+            background: #edf2f7;
+            color: #4a5568;
+        }
+        .btn-clear:hover {
+            background: #e2e8f0;
+        }
+        #results {
+            margin-top: 24px;
+            display: none;
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th {
+            background: #f7fafc;
+            text-align: left;
+            padding: 12px 16px;
+            font-weight: 600;
+            color: #4a5568;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #2d3748;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        tr:hover td {
+            background: #ebf8ff;
+        }
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-active {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        .status-closed {
+            background: #fed7d7;
+            color: #822727;
+        }
+        .status-pending {
+            background: #feebc8;
+            color: #744210;
+        }
+        .btn-open {
+            color: #3182ce;
+            background: none;
+            border: none;
+            padding: 0;
+            font: inherit;
+            cursor: pointer;
+            font-weight: 600;
+            text-decoration: underline;
+        }
+        .btn-open:hover {
+            color: #2c5282;
+        }
+        .error-message {
+            background: #fff5f5;
+            color: #c53030;
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid #fed7d7;
+            margin-top: 20px;
+        }
+        .result-count {
+            color: #718096;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="search-container">
+        <h2>Referral Search</h2>
+
+        <div class="search-grid">
+            <div class="field-group">
+                <label>Claimant Name (Last, First)</label>
+                <input type="text" id="record_name" placeholder="e.g. Smith, John">
+            </div>
+            <div class="field-group">
+                <label>Claim Number</label>
+                <input type="text" id="claim_number" placeholder="Enter Claim #">
+            </div>
+            <div class="field-group">
+                <label>Referral ID</label>
+                <input type="text" id="referral_id" placeholder="Enter ID">
+            </div>
+            <div class="field-group">
+                <label>SSN (Last 4)</label>
+                <input type="text" id="ssn" placeholder="Last 4 Digits" maxlength="4">
+            </div>
+            <div class="field-group">
+                <label>Date of Birth</label>
+                <input type="date" id="claimant_dob">
+            </div>
+        </div>
+
+        <div class="button-group">
+            <button class="btn-clear" onclick="clearForm()">Clear</button>
+            <button class="btn-search" onclick="searchReferrals()">Search</button>
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <script>
+        ZOHO.embeddedApp.init().then(function(){
+            console.log("Magnolia Referral Search Widget Loaded");
+        });
+
+        // Allow Enter key to trigger search
+        document.querySelectorAll('input').forEach(function(input) {
+            input.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') searchReferrals();
+            });
+        });
+
+        function clearForm() {
+            document.querySelectorAll('input').forEach(function(input) {
+                input.value = '';
+            });
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.style.display = 'none';
+            resultsDiv.innerHTML = '';
+        }
+
+        function sanitize(value) {
+            // Escape single quotes to prevent COQL injection
+            return value.replace(/'/g, "\\'").trim();
+        }
+
+        function searchReferrals() {
+            const resultDiv = document.getElementById('results');
+            resultDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#666;">Searching records...</div>';
+            resultDiv.style.display = 'block';
+
+            // --- 1. COLLECT DATA ---
+            const criteria = {
+                'Name': document.getElementById('record_name').value,
+                'Claim_Number': document.getElementById('claim_number').value,
+                'Referral_Number': document.getElementById('referral_id').value,
+                'SSN': document.getElementById('ssn').value,
+                'Claimant_DOB': document.getElementById('claimant_dob').value
+            };
+
+            // --- 2. BUILD QUERY ---
+            let conditions = [];
+            let keys = Object.keys(criteria);
+            for (let i = 0; i < keys.length; i++) {
+                let field = keys[i];
+                let value = criteria[field];
+                if (value && value.trim() !== '') {
+                    let clean = sanitize(value);
+                    if (field === 'Claimant_DOB') {
+                        conditions.push('(' + field + ' = \'' + clean + '\')');
+                    } else {
+                        conditions.push('(' + field + ' like \'%' + clean + '%\')');
+                    }
+                }
+            }
+
+            if (conditions.length === 0) {
+                showError('Please enter at least one search term.');
+                return;
+            }
+
+            // --- 3. EXECUTE QUERY ---
+            const selectQuery = 'select Name, Referral_Number, Claim_Number, Claimant_DOB, Status, id from Referrals where ' + conditions.join(' AND ') + ' limit 50';
+            console.log("Query:", selectQuery);
+
+            ZOHO.CRM.API.coql({ select_query: selectQuery })
+                .then(function(data) {
+                    if (data.data && data.data.length > 0) {
+                        displayResults(data.data);
+                    } else {
+                        showError('No referrals found matching your criteria.');
+                    }
+                })
+                .catch(function(error) {
+                    console.error("Search Failed:", error);
+                    showError('Search Error: ' + JSON.stringify(error));
+                });
+        }
+
+        function displayResults(records) {
+            let html = '<div class="result-count">' + records.length + ' result' + (records.length !== 1 ? 's' : '') + ' found</div>';
+            html += '<table><thead><tr><th>Referral ID</th><th>Claimant Name</th><th>DOB</th><th>Claim #</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+
+            for (let i = 0; i < records.length; i++) {
+                let record = records[i];
+                let rName = record.Name || '-';
+                let rID = record.Referral_Number || '-';
+                let cNum = record.Claim_Number || '-';
+                let dob = record.Claimant_DOB || '-';
+                let status = record.Status || 'Active';
+                let recordId = record.id;
+
+                let statusClass = 'status-pending';
+                if (status === 'Closed') statusClass = 'status-closed';
+                if (status === 'Active' || status === 'Approved') statusClass = 'status-active';
+
+                html += '<tr>' +
+                    '<td><strong>' + rID + '</strong></td>' +
+                    '<td>' + rName + '</td>' +
+                    '<td>' + dob + '</td>' +
+                    '<td>' + cNum + '</td>' +
+                    '<td><span class="status-badge ' + statusClass + '">' + status + '</span></td>' +
+                    '<td><button class="btn-open" onclick="openRecord(\'' + recordId + '\')">Open Case ↗️</button></td>' +
+                    '</tr>';
+            }
+
+            html += '</tbody></table>';
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = html;
+            resultsDiv.style.display = 'block';
+        }
+
+        function openRecord(recordId) {
+            ZOHO.CRM.UI.Record.open({
+                Entity: "Referrals",
+                RecordID: recordId,
+                Target: "_blank"
+            }).then(function(data){
+                console.log("Record Opened:", data);
+            });
+        }
+
+        function showError(message) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<div class="error-message"><strong>⚠️ Status:</strong> ' + message + '</div>';
+            resultsDiv.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
