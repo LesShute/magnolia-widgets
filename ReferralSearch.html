@@ -269,7 +269,7 @@
             }
 
             // --- 3. EXECUTE QUERY ---
-            const selectQuery = 'select Name, Referral_Number, Claim_Number, Claimant_DOB, Status, id from ReferralsNEW where ' + conditions.join(' AND ') + ' limit 50';
+            const selectQuery = 'select Name, Referral_Number, Claim_Number, Claimant_DOB, Status, id from Deals where ' + conditions.join(' AND ') + ' limit 50';
             console.log("Query:", selectQuery);
 
             ZOHO.CRM.API.coql({ select_query: selectQuery })
@@ -321,7 +321,7 @@
 
         function openRecord(recordId) {
             ZOHO.CRM.UI.Record.open({
-                Entity: "ReferralsNEW",
+                Entity: "Deals",
                 RecordID: recordId,
                 Target: "_blank"
             }).then(function(data){
