@@ -240,7 +240,7 @@
 
             // --- 1. COLLECT DATA ---
             const criteria = {
-                'Name': document.getElementById('record_name').value,
+                'Deal_Name': document.getElementById('record_name').value,
                 'Claim_Number': document.getElementById('claim_number').value,
                 'Referral_Number': document.getElementById('referral_id').value,
                 'SSN': document.getElementById('ssn').value,
@@ -269,7 +269,7 @@
             }
 
             // --- 3. EXECUTE QUERY ---
-            const selectQuery = 'select Name, Referral_Number, Claim_Number, Claimant_DOB, Referral_Status, id from Deals where ' + conditions.join(' AND ') + ' limit 50';
+            const selectQuery = 'select Deal_Name, Referral_Number, Claim_Number, Claimant_DOB, Referral_Status, id from Deals where ' + conditions.join(' AND ') + ' limit 50';
             console.log("Query:", selectQuery);
 
             ZOHO.CRM.API.coql({ select_query: selectQuery })
@@ -292,7 +292,7 @@
 
             for (let i = 0; i < records.length; i++) {
                 let record = records[i];
-                let rName = record.Name || '-';
+                let rName = record.Deal_Name || '-';
                 let rID = record.Referral_Number || '-';
                 let cNum = record.Claim_Number || '-';
                 let dob = record.Claimant_DOB || '-';
