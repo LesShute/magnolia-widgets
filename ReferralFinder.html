@@ -269,7 +269,7 @@
             }
 
             // --- 3. EXECUTE QUERY ---
-            const selectQuery = 'select Name, Referral_Number, Claim_Number, Claimant_DOB, Stage, id from Deals where ' + conditions.join(' AND ') + ' limit 50';
+            const selectQuery = 'select Name, Referral_Number, Claim_Number, Claimant_DOB, Referral_Status, id from Deals where ' + conditions.join(' AND ') + ' limit 50';
             console.log("Query:", selectQuery);
 
             ZOHO.CRM.API.coql({ select_query: selectQuery })
@@ -296,7 +296,7 @@
                 let rID = record.Referral_Number || '-';
                 let cNum = record.Claim_Number || '-';
                 let dob = record.Claimant_DOB || '-';
-                let status = record.Stage || 'Active';
+                let status = record.Referral_Status || 'Active';
                 let recordId = record.id;
 
                 let statusClass = 'status-pending';
