@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patient Pre-Check - Magnolia</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            max-width: 700px;
+            width: 100%;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 16px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+        
+        .form-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .form-input::placeholder {
+            color: #999;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        
+        .btn {
+            flex: 1;
+            padding: 14px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #666;
+        }
+        
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+        
+        .results {
+            margin-top: 30px;
+            display: none;
+        }
+        
+        .results.show {
+            display: block;
+        }
+        
+        .alert {
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            border: 2px solid #c3e6cb;
+            color: #155724;
+        }
+        
+        .alert-warning {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            color: #856404;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            border: 2px solid #f5c6cb;
+            color: #721c24;
+        }
+        
+        .alert-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        
+        .alert-icon {
+            font-size: 28px;
+        }
+        
+        .alert h3 {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        
+        .alert-body {
+            line-height: 1.6;
+        }
+        
+        .duplicate-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .duplicate-item {
+            background: #f8f9fa;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            padding: 16px;
+            transition: all 0.2s;
+        }
+        
+        .duplicate-item:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+        }
+        
+        .duplicate-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .referral-name {
+            font-weight: 600;
+            color: #667eea;
+            font-size: 18px;
+        }
+        
+        .referral-date {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .duplicate-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+        
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .detail-label {
+            font-size: 11px;
+            color: #666;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+        
+        .detail-value {
+            font-size: 15px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 6px 14px;
+            border-radius: 16px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        
+        .status-new { background: #d4edda; color: #155724; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-completed { background: #cce5ff; color: #004085; }
+        
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 14px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-view {
+            background: #667eea;
+            color: white;
+            flex: 1;
+        }
+        
+        .btn-view:hover {
+            background: #5568d3;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .loading-text {
+            text-align: center;
+            color: #666;
+            margin-top: 12px;
+        }
+        
+        .create-referral-btn {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 20px;
+        }
+        
+        .create-referral-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(17, 153, 142, 0.4);
+        }
+        
+        .hint {
+            font-size: 13px;
+            color: #666;
+            margin-top: 6px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-icon">🔍</div>
+            <h1>Patient Pre-Check</h1>
+            <p>Search for existing patients before creating a new referral</p>
+        </div>
+        
+        <div class="content">
+            <form id="searchForm">
+                <div class="form-group">
+                    <label class="form-label">First Name *</label>
+                    <input type="text" 
+                           id="firstName" 
+                           class="form-input" 
+                           placeholder="Enter patient's first name"
+                           required>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Last Name *</label>
+                    <input type="text" 
+                           id="lastName" 
+                           class="form-input" 
+                           placeholder="Enter patient's last name"
+                           required>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Date of Birth *</label>
+                    <input type="date" 
+                           id="dob" 
+                           class="form-input" 
+                           required>
+                    <div class="hint">Used to confirm patient identity</div>
+                </div>
+                
+                <div class="button-group">
+                    <button type="submit" class="btn btn-primary" id="searchBtn">
+                        Check for Duplicates
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="clearBtn">
+                        Clear
+                    </button>
+                </div>
+            </form>
+            
+            <div id="results" class="results">
+                <!-- Results will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let searchedFirstName = '';
+        let searchedLastName = '';
+        let searchedDOB = '';
+
+        // Initialize Zoho SDK
+        ZOHO.embeddedApp.on("PageLoad", function(data) {
+            console.log("Widget loaded");
+        });
+
+        ZOHO.embeddedApp.init();
+
+        // Form submission
+        document.getElementById('searchForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            searchedFirstName = document.getElementById('firstName').value.trim();
+            searchedLastName = document.getElementById('lastName').value.trim();
+            searchedDOB = document.getElementById('dob').value;
+            
+            if (!searchedFirstName || !searchedLastName || !searchedDOB) {
+                showError('Please fill in all required fields.');
+                return;
+            }
+            
+            await searchForDuplicates();
+        });
+
+        // Clear button
+        document.getElementById('clearBtn').addEventListener('click', function() {
+            document.getElementById('searchForm').reset();
+            document.getElementById('results').classList.remove('show');
+            document.getElementById('results').innerHTML = '';
+        });
+
+        async function searchForDuplicates() {
+            showLoading();
+            
+            try {
+                // COQL query to find matching referrals
+                const coqlQuery = `SELECT id, Deal_Name, Stage, Created_Time, Claimant_Cell, Claimant_Email, Address_1, Claimant_First_Name, Claimant_Last_Name, Claimant_DOB
+                    FROM Deals 
+                    WHERE Claimant_First_Name = '${escapeCOQL(searchedFirstName)}' 
+                    AND Claimant_Last_Name = '${escapeCOQL(searchedLastName)}' 
+                    AND Claimant_DOB = '${searchedDOB}'
+                    ORDER BY Created_Time DESC
+                    LIMIT 50`;
+
+                const response = await ZOHO.CRM.CONNECTION.invoke("magnolia_coql", {
+                    method: "POST",
+                    param: {
+                        select_query: coqlQuery
+                    }
+                });
+
+                const result = JSON.parse(response);
+                
+                if (result.data && result.data.length > 0) {
+                    showDuplicates(result.data);
+                } else {
+                    showNoDuplicates();
+                }
+            } catch (error) {
+                console.error("Error searching:", error);
+                showError("Error searching for patients: " + error.message);
+            }
+        }
+
+        function showLoading() {
+            const results = document.getElementById('results');
+            results.classList.add('show');
+            results.innerHTML = `
+                <div class="spinner"></div>
+                <div class="loading-text">Searching for existing patients...</div>
+            `;
+        }
+
+        function showDuplicates(duplicates) {
+            const results = document.getElementById('results');
+            
+            let html = `
+                <div class="alert alert-warning">
+                    <div class="alert-header">
+                        <span class="alert-icon">⚠️</span>
+                        <h3>Duplicate Patient Found!</h3>
+                    </div>
+                    <div class="alert-body">
+                        Found <strong>${duplicates.length}</strong> existing referral(s) for <strong>${searchedFirstName} ${searchedLastName}</strong> (DOB: ${formatDate(searchedDOB)})
+                        <br><br>
+                        Please review the existing referrals below. You may want to update an existing referral instead of creating a new one.
+                    </div>
+                </div>
+                
+                <div class="duplicate-list">
+            `;
+
+            duplicates.forEach(dup => {
+                const stage = dup.Stage || 'Unknown';
+                const statusClass = getStatusClass(stage);
+                
+                html += `
+                    <div class="duplicate-item">
+                        <div class="duplicate-header">
+                            <span class="referral-name">${dup.Deal_Name || 'Unnamed Referral'}</span>
+                            <span class="referral-date">${formatDate(dup.Created_Time)}</span>
+                        </div>
+                        <div class="duplicate-details">
+                            <div class="detail-item">
+                                <span class="detail-label">Status</span>
+                                <span class="status-badge ${statusClass}">${stage}</span>
+                            </div>
+                            ${dup.Claimant_Cell ? `
+                            <div class="detail-item">
+                                <span class="detail-label">Phone</span>
+                                <span class="detail-value">${dup.Claimant_Cell}</span>
+                            </div>
+                            ` : ''}
+                            ${dup.Claimant_Email ? `
+                            <div class="detail-item">
+                                <span class="detail-label">Email</span>
+                                <span class="detail-value">${dup.Claimant_Email}</span>
+                            </div>
+                            ` : ''}
+                            ${dup.Address_1 ? `
+                            <div class="detail-item">
+                                <span class="detail-label">Address</span>
+                                <span class="detail-value">${dup.Address_1}</span>
+                            </div>
+                            ` : ''}
+                        </div>
+                        <div class="action-buttons">
+                            <button class="btn-small btn-view" onclick="openReferral('${dup.id}')">
+                                📋 View Referral
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += `
+                </div>
+                <button class="create-referral-btn" onclick="createNewReferral()">
+                    ➕ Create New Referral Anyway
+                </button>
+            `;
+
+            results.innerHTML = html;
+        }
+
+        function showNoDuplicates() {
+            const results = document.getElementById('results');
+            results.innerHTML = `
+                <div class="alert alert-success">
+                    <div class="alert-header">
+                        <span class="alert-icon">✅</span>
+                        <h3>No Duplicates Found</h3>
+                    </div>
+                    <div class="alert-body">
+                        No existing referrals found for <strong>${searchedFirstName} ${searchedLastName}</strong> (DOB: ${formatDate(searchedDOB)})
+                        <br><br>
+                        This appears to be a new patient. You can proceed with creating a new referral.
+                    </div>
+                </div>
+                <button class="create-referral-btn" onclick="createNewReferral()">
+                    ➕ Create New Referral
+                </button>
+            `;
+        }
+
+        function showError(message) {
+            const results = document.getElementById('results');
+            results.classList.add('show');
+            results.innerHTML = `
+                <div class="alert alert-error">
+                    <div class="alert-header">
+                        <span class="alert-icon">❌</span>
+                        <h3>Error</h3>
+                    </div>
+                    <div class="alert-body">
+                        ${message}
+                    </div>
+                </div>
+            `;
+        }
+
+        function escapeCOQL(str) {
+            if (!str) return '';
+            return str.replace(/'/g, "\\'");
+        }
+
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric' 
+            });
+        }
+
+        function getStatusClass(stage) {
+            const lowerStage = stage.toLowerCase();
+            if (lowerStage.includes('new') || lowerStage.includes('intake')) return 'status-new';
+            if (lowerStage.includes('pending') || lowerStage.includes('progress')) return 'status-pending';
+            if (lowerStage.includes('complete') || lowerStage.includes('closed')) return 'status-completed';
+            return 'status-pending';
+        }
+
+        function openReferral(referralId) {
+            ZOHO.CRM.UI.Record.open({
+                Entity: "Deals",
+                RecordID: referralId
+            });
+        }
+
+        function createNewReferral() {
+            // Pre-fill the create form with the searched data
+            ZOHO.CRM.UI.Record.create({
+                Entity: "Deals",
+                Data: {
+                    Claimant_First_Name: searchedFirstName,
+                    Claimant_Last_Name: searchedLastName,
+                    Claimant_DOB: searchedDOB
+                }
+            }).then(function(data) {
+                console.log("Referral created:", data);
+                // Reset the form
+                document.getElementById('searchForm').reset();
+                document.getElementById('results').classList.remove('show');
+                document.getElementById('results').innerHTML = '';
+            });
+        }
+    </script>
+</body>
+</html>
