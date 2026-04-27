@@ -197,6 +197,14 @@
                 <label>Date of Birth</label>
                 <input type="date" id="claimant_dob">
             </div>
+            <div class="field-group">
+                <label>Payer Name</label>
+                <input type="text" id="payer_name" placeholder="Enter Payer Name">
+            </div>
+            <div class="field-group">
+                <label>Adjuster Name</label>
+                <input type="text" id="adjuster_name" placeholder="Enter Adjuster Name">
+            </div>
         </div>
 
         <div class="button-group">
@@ -212,7 +220,6 @@
             console.log("Magnolia ReferralFinder Widget Loaded");
         });
 
-        // Allow Enter key to trigger search
         document.querySelectorAll('input').forEach(function(input) {
             input.addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') searchReferrals();
@@ -229,7 +236,6 @@
         }
 
         function sanitize(value) {
-            // Escape single quotes to prevent COQL injection
             return value.replace(/'/g, "\\'").trim();
         }
 
@@ -238,37 +244,30 @@
             resultDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#666;">Searching records...</div>';
             resultDiv.style.display = 'block';
 
-            // --- 1. COLLECT DATA ---
             const criteria = {
                 'Deal_Name': document.getElementById('record_name').value,
                 'Claim_Number': document.getElementById('claim_number').value,
                 'Referral_Number': document.getElementById('referral_id').value,
                 'SSN': document.getElementById('ssn').value,
-                'Claimant_DOB': document.getElementById('claimant_dob').value
+                'Claimant_DOB': document.getElementById('claimant_dob').value,
+                'payer_name': document.getElementById('payer_name').value,
+                'adjuster_name': document.getElementById('adjuster_name').value
             };
 
-            // --- 2. BUILD QUERY ---
             let conditions = [];
-            let keys = Object.keys(criteria);
-            for (let i = 0; i < keys.length; i++) {
-                let field = keys[i];
-                let value = criteria[field];
-                if (value && value.trim() !== '') {
-                    let clean = sanitize(value);
-                    if (field === 'Claimant_DOB') {
-                        conditions.push('(' + field + ' = \'' + clean + '\')');
-                    } else {
-                        conditions.push('(' + field + ' like \'%' + clean + '%\')');
-                    }
-                }
-            }
+            if (criteria['Deal_Name']) conditions.push("(Deal_Name like '%" + sanitize(criteria['Deal_Name']) + "%')");
+            if (criteria['Claim_Number']) conditions.push("(Claim_Number like '%" + sanitize(criteria['Claim_Number']) + "%')");
+            if (criteria['Referral_Number']) conditions.push("(Referral_Number like '%" + sanitize(criteria['Referral_Number']) + "%')");
+            if (criteria['SSN']) conditions.push("(SSN like '%" + sanitize(criteria['SSN']) + "%')");
+            if (criteria['Claimant_DOB']) conditions.push("(Claimant_DOB = '" + criteria['Claimant_DOB'] + "')");
+            if (criteria['payer_name']) conditions.push("(Account_Name.name like '%" + sanitize(criteria['payer_name']) + "%')");
+            if (criteria['adjuster_name']) conditions.push("(Contact_Name.name like '%" + sanitize(criteria['adjuster_name']) + "%')");
 
             if (conditions.length === 0) {
                 showError('Please enter at least one search term.');
                 return;
             }
 
-            // --- 3. EXECUTE QUERY ---
             const selectQuery = 'select Deal_Name, Referral_Number, Claim_Number, Claimant_DOB, Referral_Status, id from Deals where ' + conditions.join(' AND ') + ' limit 50';
             console.log("Query:", selectQuery);
 
