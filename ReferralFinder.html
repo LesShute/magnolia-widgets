@@ -238,53 +238,36 @@
         function sanitize(value) {
             return value.replace(/'/g, "\\'").trim();
         }
-function searchReferrals() {
-    const resultDiv = document.getElementById('results');
-    resultDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#666;">Searching records...</div>';
-    resultDiv.style.display = 'block';
 
-    const criteria = {
-        'Deal_Name': document.getElementById('record_name').value,
-        'Claim_Number': document.getElementById('claim_number').value,
-        'Referral_Number': document.getElementById('referral_id').value,
-        'SSN': document.getElementById('ssn').value,
-        'Claimant_DOB': document.getElementById('claimant_dob').value,
-        'payer_name': document.getElementById('payer_name').value,
-        'adjuster_name': document.getElementById('adjuster_name').value
-    };
+        function searchReferrals() {
+            const resultDiv = document.getElementById('results');
+            resultDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#666;">Searching records...</div>';
+            resultDiv.style.display = 'block';
 
-    let conditions = [];
-    if (criteria['Deal_Name']) conditions.push("(Deal_Name like '%" + sanitize(criteria['Deal_Name']) + "%')");
-    if (criteria['Claim_Number']) conditions.push("(Claim_Number like '%" + sanitize(criteria['Claim_Number']) + "%')");
-    if (criteria['Referral_Number']) conditions.push("(Referral_Number like '%" + sanitize(criteria['Referral_Number']) + "%')");
-    if (criteria['SSN']) conditions.push("(SSN like '%" + sanitize(criteria['SSN']) + "%')");
-    if (criteria['Claimant_DOB']) conditions.push("(Claimant_DOB = '" + criteria['Claimant_DOB'] + "')");
-    
-    // Fixed Payer and Adjuster lookups
-    if (criteria['payer_name']) conditions.push("(Account_Name like '%" + sanitize(criteria['payer_name']) + "%')");
-    if (criteria['adjuster_name']) conditions.push("(Contact_Name like '%" + sanitize(criteria['adjuster_name']) + "%')");
+            const criteria = {
+                'Deal_Name': document.getElementById('record_name').value,
+                'Claim_Number': document.getElementById('claim_number').value,
+                'Referral_Number': document.getElementById('referral_id').value,
+                'SSN': document.getElementById('ssn').value,
+                'Claimant_DOB': document.getElementById('claimant_dob').value,
+                'payer_name': document.getElementById('payer_name').value,
+                'adjuster_name': document.getElementById('adjuster_name').value
+            };
 
-    if (conditions.length === 0) {
-        showError('Please enter at least one search term.');
-        return;
-    }
+            let conditions = [];
+            if (criteria['Deal_Name']) conditions.push("(Deal_Name like '%" + sanitize(criteria['Deal_Name']) + "%')");
+            if (criteria['Claim_Number']) conditions.push("(Claim_Number like '%" + sanitize(criteria['Claim_Number']) + "%')");
+            if (criteria['Referral_Number']) conditions.push("(Referral_Number like '%" + sanitize(criteria['Referral_Number']) + "%')");
+            if (criteria['SSN']) conditions.push("(SSN like '%" + sanitize(criteria['SSN']) + "%')");
+            if (criteria['Claimant_DOB']) conditions.push("(Claimant_DOB = '" + criteria['Claimant_DOB'] + "')");
+            if (criteria['payer_name']) conditions.push("(Account_Name.name like '%" + sanitize(criteria['payer_name']) + "%')");
+            if (criteria['adjuster_name']) conditions.push("(Contact_Name.name like '%" + sanitize(criteria['adjuster_name']) + "%')");
 
-    const selectQuery = 'select Deal_Name, Referral_Number, Claim_Number, Claimant_DOB, Referral_Status, id from Deals where ' + conditions.join(' AND ') + ' limit 50';
-    console.log("Query:", selectQuery);
-
-    ZOHO.CRM.API.coql({ select_query: selectQuery })
-        .then(function(data) {
-            if (data.data && data.data.length > 0) {
-                displayResults(data.data);
-            } else {
-                showError('No referrals found matching your criteria.');
+            if (conditions.length === 0) {
+                showError('Please enter at least one search term.');
+                return;
             }
-        })
-        .catch(function(error) {
-            console.error("Search Failed:", error);
-            showError('Search Error: ' + JSON.stringify(error));
-        });
-}
+
             const selectQuery = 'select Deal_Name, Referral_Number, Claim_Number, Claimant_DOB, Referral_Status, id from Deals where ' + conditions.join(' AND ') + ' limit 50';
             console.log("Query:", selectQuery);
 
