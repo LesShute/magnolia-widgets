@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagnoliaMap - Final v4.0</title>
+    <title>MagnoliaMap - Find Nearby Providers</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCWYDQ2ruxrrYSKZpwVUkI2uhSRjgb-6uU&libraries=geometry"></script>
@@ -12,33 +12,44 @@
         #controls {
             background: white; padding: 15px; margin: 10px; border: 1px solid #ccc;
             border-radius: 5px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            max-height: 520px; overflow-y: auto; width: 280px; position: absolute; top: 10px; left: 10px; z-index: 1000;
+            max-height: 580px; overflow-y: auto; width: 280px;
         }
         .control-section { margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #ddd; }
         .control-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
         .control-section h4 { margin: 0 0 10px 0; color: #333; font-size: 14px; }
         .checkbox-item { margin: 6px 0; display: flex; align-items: center; cursor: pointer; }
         .checkbox-item:hover { background: #f5f5f5; padding: 4px; border-radius: 3px; }
-        .color-dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; border: 1px solid #666; }
-        #loading {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            font-size: 16px; color: #333; background: white; padding: 20px;
-            border-radius: 5px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 1000;
-        }
+        .checkbox-item label { cursor: pointer; flex: 1; }
+        .color-dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; margin-left: 4px; border: 1px solid #666; flex-shrink: 0; }
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 16px; color: #333; background: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 1000; }
         input[type="text"] { width: 100%; padding: 8px; margin: 6px 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
         button { padding: 9px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 6px; }
         .plot-btn { background:#4CAF50; color:white; }
         .clear-btn { background:#f44336; color:white; }
+        .info-window h4 { margin: 0 0 6px 0; font-size: 14px; }
+        .info-window .services { font-size: 12px; color: #555; }
+        .info-window .distance { font-size: 12px; color: #888; margin-top: 4px; }
+        #searchCenterStatus { font-size: 12px; color: #555; font-style: italic; margin-top: 6px; }
     </style>
 </head>
 <body>
-    <div id="loading">Loading providers from CustomModule13...</div>
+    <div id="loading">Loading providers from Zoho...</div>
     <div id="map"></div>
 
     <script>
-        let map, patientMarker, altMarker = null, providerMarkers = [];
+        // === MagnoliaMap v3.17 ===
+        // Fixes vs v3.16:
+        //   1. COQL query corrected to use API name "CustomModule13" (label is "Providers")
+        //   2. Service type filter checkboxes inlined to eliminate setTimeout race condition
+        //   3. Provider markers now color-coded by Location_Services_Offered
+        //   4. Manual ("alternative") address now re-pivots the radius search and re-plots providers
+
+        const PROVIDERS_MODULE_API_NAME = "CustomModule13"; // Module label = "Providers"
+
+        let map, patientMarker, altMarker = null, providerMarkers = [], infoWindow;
         let currentReferral = {};
         let patientLocation = null;
+        let searchCenter = null;        // <-- drives radius filtering; defaults to patient, follows alt address
         let currentRadius = 25;
         let activeServiceTypes = new Set();
         let allProviders = [];
@@ -54,7 +65,7 @@
         };
 
         function log(msg) {
-            console.log('[MagnoliaMap v4.0]', msg);
+            console.log('[MagnoliaMap v3.17]', msg);
         }
 
         ZOHO.embeddedApp.on("PageLoad", function(data) {
@@ -65,7 +76,7 @@
 
         async function loadReferralData(recordId) {
             try {
-                const resp = await ZOHO.CRM.API.getRecord({Entity: "Deals", RecordID: recordId});
+                const resp = await ZOHO.CRM.API.getRecord({ Entity: "Deals", RecordID: recordId });
                 if (resp.data && resp.data[0]) {
                     currentReferral = resp.data[0];
                     log('Referral loaded');
@@ -75,121 +86,123 @@
         }
 
         function initMap() {
-map = new google.maps.Map(document.getElementById('map'), {
-                center: { lat: 33.15, lng: -96.82 },
-                zoom: 10,
-                mapTypeControl: false,
-                streetViewControl: false
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 33.15, lng: -96.82 }, zoom: 10,
+                mapTypeControl: false, streetViewControl: false
             });
+            infoWindow = new google.maps.InfoWindow();
 
             const controls = createControlsPanel();
             map.controls[google.maps.ControlPosition.LEFT_TOP].push(controls);
 
-            setTimeout(() => {
-                createFilterCheckboxes();
-                plotPatientLocation();
-            }, 200);
+            plotPatientLocation();
         }
 
+        // --- FIX #2: Inline the filter checkboxes directly in the panel HTML.
+        //    The previous setTimeout(createFilterCheckboxes, 300) was unreliable
+        //    because Google Maps can defer attaching the control to the DOM.
         function createControlsPanel() {
             const panel = document.createElement('div');
             panel.id = 'controls';
+
+            const filterRows = Object.keys(SERVICE_COLORS).map(type => `
+                <div class="checkbox-item">
+                    <input type="checkbox" id="filter_${cssId(type)}" onchange="toggleServiceType('${type}', this.checked)">
+                    <span class="color-dot" style="background:${SERVICE_COLORS[type]}"></span>
+                    <label for="filter_${cssId(type)}">${type}</label>
+                </div>
+            `).join('');
+
             panel.innerHTML = `
                 <div class="control-section">
                     <h4>Search Radius: <span id="radVal">${currentRadius}</span> mi</h4>
-                    <input type="range" min="5" max="100" value="${currentRadius}" style="width:100%;" onchange="updateRadius(this.value)">
+                    <input type="range" min="5" max="100" value="${currentRadius}" style="width:100%;" oninput="updateRadius(this.value)">
                 </div>
                 <div class="control-section">
                     <h4>Filter by Service Type</h4>
-                    <div id="serviceFilters"></div>
+                    ${filterRows}
                 </div>
                 <div class="control-section">
                     <h4>Plot Alternative Address</h4>
                     <input type="text" id="altAddress" placeholder="Work, school, family home, etc.">
                     <button class="plot-btn" onclick="plotAlternativeAddress()">Plot Alternative Address</button>
                     <button class="clear-btn" onclick="clearAlternativeAddress()">Clear Alternative Marker</button>
+                    <div id="searchCenterStatus">Searching around: Claimant Home</div>
                 </div>
-                <div id="providerCount" style="font-size:13px; margin-top:10px; padding-top:10px; border-top:1px solid #ddd;">0 providers shown</div>
+                <div id="providerCount" style="font-size:13px; margin-top:10px; padding-top:10px; border-top:1px solid #ddd;">Loading...</div>
             `;
             return panel;
         }
 
-        function createFilterCheckboxes() {
-            const container = document.getElementById('serviceFilters');
-            if (!container) return;
-            container.innerHTML = '';
-            Object.keys(SERVICE_COLORS).forEach(type => {
-                const div = document.createElement('div');
-                div.className = 'checkbox-item';
-                div.innerHTML = `
-                    <input type="checkbox" onchange="toggleServiceType('${type}', this.checked)">
-                    <span class="color-dot" style="background:${SERVICE_COLORS[type]}"></span>
-                    <label>${type}</label>
-                `;
-                container.appendChild(div);
-            });
-        }
+        function cssId(s) { return s.replace(/[^a-zA-Z0-9]/g, '_'); }
 
-        function updateRadius(val) {
+        window.updateRadius = function(val) {
             currentRadius = parseInt(val);
             document.getElementById('radVal').innerText = val;
-            if (patientLocation) filterAndPlotProviders();
-        }
+            if (searchCenter) filterAndPlotProviders();
+        };
 
         window.toggleServiceType = function(type, checked) {
-            if (checked) activeServiceTypes.add(type);
-            else activeServiceTypes.delete(type);
-            if (patientLocation) filterAndPlotProviders();
+            if (checked) activeServiceTypes.add(type); else activeServiceTypes.delete(type);
+            if (searchCenter) filterAndPlotProviders();
         };
 
         async function plotPatientLocation() {
             const address = [
-                currentReferral.Street_Address_1 || currentReferral.Street_Address,
-                currentReferral.City || currentReferral.Claimant_City,
-                currentReferral.State,
-                currentReferral.Zip
+                currentReferral.Street_Address_1,
+                currentReferral.Provider_Address_City || currentReferral.City,
+                currentReferral.Provider_Address_State || currentReferral.State,
+                currentReferral.Provider_Address_Zip || currentReferral.Zip
             ].filter(Boolean).join(', ');
 
             log('Geocoding: ' + address);
-            if (!address) return hideLoading();
+            if (!address) return;
 
             try {
                 const geocoder = new google.maps.Geocoder();
-                const result = await new Promise(r => geocoder.geocode({address}, (res,s) => s==="OK" && r(res[0])));
+                const result = await new Promise(r =>
+                    geocoder.geocode({ address }, (res, status) => status === "OK" && r(res[0]))
+                );
                 patientLocation = result.geometry.location;
+                searchCenter = patientLocation; // default radius search center
                 map.setCenter(patientLocation);
                 map.setZoom(11);
-patientMarker = new google.maps.Marker({
+
+                patientMarker = new google.maps.Marker({
                     position: patientLocation,
                     map: map,
                     title: "Claimant Home",
-                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png" }
+                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png" },
+                    zIndex: 999
                 });
 
                 await loadProviders();
-            } catch (e) {
-                log('Geocode failed: ' + e);
-                hideLoading();
-            }
+            } catch (e) { log('Geocode failed: ' + e); }
         }
 
+        // --- FIX #1: Use API name (CustomModule13), not the module label ("Providers").
         async function loadProviders() {
-            log('Querying CustomModule13 (Providers)...');
+            log(`Running COQL query on ${PROVIDERS_MODULE_API_NAME}...`);
             try {
-                const resp = await ZOHO.CRM.API.getAllRecords({Entity: "CustomModule13", per_page: 200});
+                const query =
+                    `select Name, Provider_Contract_Status, Location_Services_Offered, ` +
+                    `Provider_Latitude, Provider_Longitude ` +
+                    `from ${PROVIDERS_MODULE_API_NAME} ` +
+                    `where Provider_Latitude is not null and Provider_Longitude is not null limit 200`;
+                const resp = await ZOHO.CRM.API.coql({ select_query: query });
                 allProviders = resp.data || [];
-                log('Loaded ' + allProviders.length + ' providers from CustomModule13');
-                filterAndPlotProviders();
-            } catch (err) {
-                log('CustomModule13 query failed: ' + JSON.stringify(err));
-            } finally {
-                hideLoading();
-            }
-        }
+                log('COQL returned ' + allProviders.length + ' providers');
+                if (allProviders.length > 0) {
+                    log('First provider keys: ' + Object.keys(allProviders[0]).join(', '));
+                }
 
-        function hideLoading() {
-            const el = document.getElementById('loading');
-            if (el) el.style.display = 'none';
+                filterAndPlotProviders();
+                document.getElementById('loading').style.display = 'none';
+            } catch (err) {
+                log('COQL ERROR: ' + JSON.stringify(err));
+                document.getElementById('loading').innerHTML =
+                    'API Error - check console. Verify module API name is "' + PROVIDERS_MODULE_API_NAME + '".';
+            }
         }
 
         function getServiceTypes(p) {
@@ -199,61 +212,133 @@ patientMarker = new google.maps.Marker({
             return String(v).split(';').map(s => s.trim()).filter(Boolean);
         }
 
+        // --- FIX #3 helper: pick the marker color based on service types.
+        //    If filters are active, prefer the first matching active filter so the
+        //    visual matches what the user is searching for. Otherwise, take the
+        //    first defined service color. Fall back to "Other" gray.
+        function getProviderColor(types) {
+            if (activeServiceTypes.size > 0) {
+                for (const t of types) {
+                    if (activeServiceTypes.has(t) && SERVICE_COLORS[t]) return SERVICE_COLORS[t];
+                }
+            }
+            for (const t of types) {
+                if (SERVICE_COLORS[t]) return SERVICE_COLORS[t];
+            }
+            return SERVICE_COLORS['Other'];
+        }
+
+        function buildProviderIcon(color) {
+            return {
+                path: google.maps.SymbolPath.CIRCLE,
+                fillColor: color,
+                fillOpacity: 0.95,
+                strokeColor: '#222',
+                strokeWeight: 1.5,
+                scale: 8
+            };
+        }
+
+        // --- FIX #4: Manual address now becomes the radius search center.
         window.plotAlternativeAddress = async function() {
             const addr = document.getElementById('altAddress').value.trim();
-            if (!addr) return alert("Please enter an address");
+            if (!addr) return alert("Enter an address");
             try {
                 const geocoder = new google.maps.Geocoder();
-                const result = await new Promise(r => geocoder.geocode({address:addr}, (res,s) => s==="OK" ? r(res[0]) : null));
-                if (!result) return;
+                const result = await new Promise(r =>
+                    geocoder.geocode({ address: addr }, (res, s) => s === "OK" && r(res[0]))
+                );
                 if (altMarker) altMarker.setMap(null);
                 altMarker = new google.maps.Marker({
                     position: result.geometry.location,
-                    map: map,
-                    title: "Alternative Location",
-                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" }
+                    map,
+                    title: "Alternative Address",
+                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" },
+                    zIndex: 998
                 });
                 map.setCenter(result.geometry.location);
                 map.setZoom(12);
-            } catch (e) { alert("Could not geocode address."); }
+
+                // Re-pivot the radius search around the new pin and re-plot providers.
+                searchCenter = result.geometry.location;
+                document.getElementById('searchCenterStatus').innerText =
+                    'Searching around: Alternative Address';
+                filterAndPlotProviders();
+            } catch (e) {
+                alert("Could not geocode that address");
+            }
         };
 
         window.clearAlternativeAddress = function() {
             if (altMarker) altMarker.setMap(null);
             altMarker = null;
             document.getElementById('altAddress').value = '';
-            if (patientLocation) map.setCenter(patientLocation);
+
+            // Restore claimant home as the radius search center and re-plot.
+            if (patientLocation) {
+                searchCenter = patientLocation;
+                map.setCenter(patientLocation);
+                document.getElementById('searchCenterStatus').innerText =
+                    'Searching around: Claimant Home';
+                filterAndPlotProviders();
+            }
         };
 
         function filterAndPlotProviders() {
             providerMarkers.forEach(m => m.setMap(null));
             providerMarkers = [];
+            if (!searchCenter) return;
+
             let count = 0;
-            const filtering = activeServiceTypes.size > 0;
 
             allProviders.forEach(p => {
                 if ((p.Provider_Contract_Status || '').toLowerCase().includes('inactive')) return;
+
                 const types = getServiceTypes(p);
-                if (filtering && !types.some(t => activeServiceTypes.has(t))) return;
+                if (activeServiceTypes.size > 0 && !types.some(t => activeServiceTypes.has(t))) return;
 
                 const lat = parseFloat(p.Provider_Latitude);
                 const lng = parseFloat(p.Provider_Longitude);
-                if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
+                if (!lat || !lng) return;
 
                 const pos = new google.maps.LatLng(lat, lng);
-                const dist = google.maps.geometry.spherical.computeDistanceBetween(patientLocation, pos) / 1609.34;
-                if (dist > currentRadius) return;
+                const distMiles =
+                    google.maps.geometry.spherical.computeDistanceBetween(searchCenter, pos) / 1609.34;
+                if (distMiles > currentRadius) return;
 
-                new google.maps.Marker({
+                const color = getProviderColor(types);
+                const marker = new google.maps.Marker({
                     position: pos,
                     map: map,
-                    title: p.Name || p.Provider_Location_Name,
-                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/red-dot.png" }
+                    title: p.Name || 'Provider',
+                    icon: buildProviderIcon(color)
                 });
+
+                const servicesHtml = types.length
+                    ? types.map(t => {
+                        const c = SERVICE_COLORS[t] || SERVICE_COLORS['Other'];
+                        return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:4px;border:1px solid #666;"></span>${t}`;
+                    }).join('<br>')
+                    : '<em>No services listed</em>';
+
+                marker.addListener('click', () => {
+                    infoWindow.setContent(`
+                        <div class="info-window">
+                            <h4>${p.Name || 'Provider'}</h4>
+                            <div class="services">${servicesHtml}</div>
+                            <div class="distance">${distMiles.toFixed(1)} mi from search center</div>
+                        </div>
+                    `);
+                    infoWindow.open(map, marker);
+                });
+
+                providerMarkers.push(marker);
                 count++;
             });
-document.getElementById('providerCount').innerHTML = `<strong>${count}</strong> provider${count !== 1 ? 's' : ''} within ${currentRadius} miles`;
-            log(`Plotted ${count} providers`);
+
+            document.getElementById('providerCount').innerHTML =
+                `<strong>${count}</strong> provider${count !== 1 ? 's' : ''} shown within ${currentRadius} miles`;
+            log(`Plotted ${count} providers around search center`);
         }
     </script>
 </body>
