@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagnoliaMap v3.19 - Find Nearby Providers</title>
+    <title>MagnoliaMap v3.20 - Find Nearby Providers</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCWYDQ2ruxrrYSKZpwVUkI2uhSRjgb-6uU&libraries=geometry"></script>
@@ -12,7 +12,7 @@
         #controls {
             background: white; padding: 15px; margin: 10px; border: 1px solid #ccc;
             border-radius: 5px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            max-height: 580px; overflow-y: auto; width: 280px;
+            max-height: 90vh; overflow-y: auto; width: 290px;
         }
         .control-section { margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #ddd; }
         .control-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
@@ -21,7 +21,6 @@
         .checkbox-item:hover { background: #f5f5f5; padding: 4px; border-radius: 3px; }
         .checkbox-item label { cursor: pointer; flex: 1; }
         .color-dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; margin-left: 4px; border: 1px solid #666; flex-shrink: 0; }
-        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 16px; color: #333; background: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 1000; }
         input[type="text"] { width: 100%; padding: 8px; margin: 6px 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
         button { padding: 9px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 6px; }
         .plot-btn { background:#4CAF50; color:white; }
@@ -31,26 +30,36 @@
         .info-window .meta { font-size: 12px; color: #888; margin-top: 4px; }
         .info-window .status { font-size: 11px; color: #aaa; margin-top: 2px; }
         #searchCenterStatus { font-size: 12px; color: #555; font-style: italic; margin-top: 6px; }
+        #statusBanner {
+            font-size: 12px; padding: 8px; border-radius: 4px; margin-top: 8px;
+            background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7;
+            word-break: break-word;
+        }
+        #statusBanner.error { background: #ffebee; color: #c62828; border-color: #ef9a9a; }
+        #statusBanner.warn { background: #fff8e1; color: #ef6c00; border-color: #ffd180; }
     </style>
 </head>
 <body>
-    <div id="loading">Loading providers from Zoho...</div>
     <div id="map"></div>
 
     <script>
-        // === MagnoliaMap v3.19 ===
-        // Changes vs v3.18:
-        //   - Module reference updated from "CustomModule13" to "Providers" — the latter
-        //     is the canonical API Name as configured in Zoho. ("CustomModule13" is the
-        //     internal module identifier, which COQL also accepts but is non-canonical.)
-        //
-        // Previous changes (v3.18):
-        //   - Removed the auto-filter on Provider_Contract_Status containing "inactive"
-        //     because all current Providers carry that status pending data curation.
-        //     Restore the guarded line marked "INACTIVE-STATUS GUARD" in
-        //     filterAndPlotProviders() once status data is curated.
+        // === MagnoliaMap v3.20 ===
+        // Fixes vs v3.19:
+        //   1. CRITICAL: Geocoder promise no longer hangs forever on non-OK status.
+        //      Previously, if claimant address geocoding failed, the await blocked
+        //      indefinitely and loadProviders() was never called.
+        //   2. Provider loading now decoupled from claimant geocoding success.
+        //      If the claimant address is empty or fails to geocode, the widget
+        //      still loads providers and lets the user enter a manual address.
+        //   3. Visible status banner replaces the silent loading overlay so failure
+        //      modes are immediately apparent.
+        //   4. Full referral record now logged to console so the address-field
+        //      mapping can be verified (the assumed fields are
+        //      Street_Address_1 / City / State / Zip on the Deal — these may not
+        //      match this particular referral's schema).
 
-        const PROVIDERS_MODULE_API_NAME = "Providers"; // Canonical API Name (internal id: CustomModule13)
+        const PROVIDERS_MODULE_API_NAME = "Providers";
+        const DEFAULT_MAP_CENTER = { lat: 27.8, lng: -81.7 }; // Florida fallback
 
         let map, patientMarker, altMarker = null, providerMarkers = [], infoWindow;
         let currentReferral = {};
@@ -70,14 +79,20 @@
             'PT Direct': '#9932CC'
         };
 
-        function log(msg) {
-            console.log('[MagnoliaMap v3.19]', msg);
+        function log(msg) { console.log('[MagnoliaMap v3.20]', msg); }
+
+        function setStatus(msg, level) {
+            log('STATUS: ' + msg);
+            const el = document.getElementById('statusBanner');
+            if (el) {
+                el.innerText = msg;
+                el.className = level || '';
+            }
         }
 
         ZOHO.embeddedApp.on("PageLoad", function(data) {
             if (data && data.EntityId) loadReferralData(data.EntityId);
         });
-
         ZOHO.embeddedApp.init().then(() => log('SDK initialized'));
 
         async function loadReferralData(recordId) {
@@ -85,22 +100,26 @@
                 const resp = await ZOHO.CRM.API.getRecord({ Entity: "Deals", RecordID: recordId });
                 if (resp.data && resp.data[0]) {
                     currentReferral = resp.data[0];
-                    log('Referral loaded');
+                    log('=== FULL REFERRAL RECORD (verify field names below) ===');
+                    log(JSON.stringify(currentReferral, null, 2));
+                    log('=== Available field keys: ' + Object.keys(currentReferral).join(', '));
                     initMap();
                 }
-            } catch (e) { log('Referral error: ' + e); }
+            } catch (e) {
+                log('Referral fetch error: ' + JSON.stringify(e));
+            }
         }
 
         function initMap() {
             map = new google.maps.Map(document.getElementById('map'), {
-                center: { lat: 33.15, lng: -96.82 }, zoom: 10,
+                center: DEFAULT_MAP_CENTER, zoom: 7,
                 mapTypeControl: false, streetViewControl: false
             });
             infoWindow = new google.maps.InfoWindow();
+            map.controls[google.maps.ControlPosition.LEFT_TOP].push(createControlsPanel());
 
-            const controls = createControlsPanel();
-            map.controls[google.maps.ControlPosition.LEFT_TOP].push(controls);
-
+            // Kick off claimant location and provider load independently — neither
+            // blocks the other.
             plotPatientLocation();
         }
 
@@ -130,9 +149,10 @@
                     <input type="text" id="altAddress" placeholder="Work, school, family home, etc.">
                     <button class="plot-btn" onclick="plotAlternativeAddress()">Plot Alternative Address</button>
                     <button class="clear-btn" onclick="clearAlternativeAddress()">Clear Alternative Marker</button>
-                    <div id="searchCenterStatus">Searching around: Claimant Home</div>
+                    <div id="searchCenterStatus">Searching around: (waiting for claimant geocode)</div>
                 </div>
-                <div id="providerCount" style="font-size:13px; margin-top:10px; padding-top:10px; border-top:1px solid #ddd;">Loading...</div>
+                <div id="providerCount" style="font-size:13px; padding-top:6px;">Loading providers...</div>
+                <div id="statusBanner">Initializing...</div>
             `;
             return panel;
         }
@@ -150,37 +170,72 @@
             if (searchCenter) filterAndPlotProviders();
         };
 
-        async function plotPatientLocation() {
-            const address = [
-                currentReferral.Street_Address_1,
-                currentReferral.Provider_Address_City || currentReferral.City,
-                currentReferral.Provider_Address_State || currentReferral.State,
-                currentReferral.Provider_Address_Zip || currentReferral.Zip
-            ].filter(Boolean).join(', ');
+        // --- FIX #1: A geocoder wrapper that ACTUALLY rejects on failure
+        //    instead of silently hanging.
+        function geocodeAddress(address) {
+            return new Promise((resolve, reject) => {
+                if (!address) return reject(new Error('Empty address string'));
+                new google.maps.Geocoder().geocode({ address }, (res, status) => {
+                    if (status === "OK" && res && res[0]) {
+                        resolve(res[0]);
+                    } else {
+                        reject(new Error(`Geocode failed (status=${status}) for: "${address}"`));
+                    }
+                });
+            });
+        }
 
-            log('Geocoding: ' + address);
-            if (!address) return;
+        function buildClaimantAddress(referral) {
+            return [
+                referral.Street_Address_1,
+                referral.Provider_Address_City || referral.City,
+                referral.Provider_Address_State || referral.State,
+                referral.Provider_Address_Zip || referral.Zip
+            ].filter(Boolean).join(', ');
+        }
+
+        async function plotPatientLocation() {
+            const address = buildClaimantAddress(currentReferral);
+            log('Constructed claimant address: "' + address + '"');
+
+            // --- FIX #2: Always proceed to load providers, even if geocoding fails.
+            //    Run claimant geocoding and provider load concurrently so a slow
+            //    or failing geocode doesn't block the COQL query.
+            const providersPromise = loadProviders();
+
+            if (!address) {
+                setStatus('No claimant address found on this referral. Use "Plot Alternative Address" to set a search center.', 'warn');
+                document.getElementById('searchCenterStatus').innerText =
+                    'Searching around: (none — enter alt address)';
+                await providersPromise;
+                return;
+            }
 
             try {
-                const geocoder = new google.maps.Geocoder();
-                const result = await new Promise(r =>
-                    geocoder.geocode({ address }, (res, status) => status === "OK" && r(res[0]))
-                );
+                const result = await geocodeAddress(address);
                 patientLocation = result.geometry.location;
                 searchCenter = patientLocation;
                 map.setCenter(patientLocation);
                 map.setZoom(11);
 
                 patientMarker = new google.maps.Marker({
-                    position: patientLocation,
-                    map: map,
-                    title: "Claimant Home",
+                    position: patientLocation, map: map, title: "Claimant Home",
                     icon: { url: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png" },
                     zIndex: 999
                 });
 
-                await loadProviders();
-            } catch (e) { log('Geocode failed: ' + e); }
+                document.getElementById('searchCenterStatus').innerText = 'Searching around: Claimant Home';
+                setStatus(`Claimant geocoded: ${patientLocation.lat().toFixed(4)}, ${patientLocation.lng().toFixed(4)}`);
+            } catch (err) {
+                log('Geocoding error: ' + err.message);
+                setStatus(`Could not geocode claimant address. ${err.message}. Use "Plot Alternative Address".`, 'error');
+                document.getElementById('searchCenterStatus').innerText =
+                    'Searching around: (geocode failed — enter alt address)';
+            }
+
+            // Once providers are loaded, plot whatever we can.
+            await providersPromise;
+            if (searchCenter) filterAndPlotProviders();
         }
 
         async function loadProviders() {
@@ -197,13 +252,12 @@
                 if (allProviders.length > 0) {
                     log('First provider keys: ' + Object.keys(allProviders[0]).join(', '));
                 }
-
-                filterAndPlotProviders();
-                document.getElementById('loading').style.display = 'none';
+                document.getElementById('providerCount').innerText =
+                    `${allProviders.length} provider${allProviders.length !== 1 ? 's' : ''} loaded from Zoho`;
             } catch (err) {
                 log('COQL ERROR: ' + JSON.stringify(err));
-                document.getElementById('loading').innerHTML =
-                    'API Error - check console. Verify module API name is "' + PROVIDERS_MODULE_API_NAME + '".';
+                setStatus(`COQL error: ${JSON.stringify(err).slice(0, 200)}`, 'error');
+                document.getElementById('providerCount').innerText = 'COQL error — see console';
             }
         }
 
@@ -229,11 +283,8 @@
         function buildProviderIcon(color) {
             return {
                 path: google.maps.SymbolPath.CIRCLE,
-                fillColor: color,
-                fillOpacity: 0.95,
-                strokeColor: '#222',
-                strokeWeight: 1.5,
-                scale: 8
+                fillColor: color, fillOpacity: 0.95,
+                strokeColor: '#222', strokeWeight: 1.5, scale: 8
             };
         }
 
@@ -241,15 +292,10 @@
             const addr = document.getElementById('altAddress').value.trim();
             if (!addr) return alert("Enter an address");
             try {
-                const geocoder = new google.maps.Geocoder();
-                const result = await new Promise(r =>
-                    geocoder.geocode({ address: addr }, (res, s) => s === "OK" && r(res[0]))
-                );
+                const result = await geocodeAddress(addr);
                 if (altMarker) altMarker.setMap(null);
                 altMarker = new google.maps.Marker({
-                    position: result.geometry.location,
-                    map,
-                    title: "Alternative Address",
+                    position: result.geometry.location, map, title: "Alternative Address",
                     icon: { url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" },
                     zIndex: 998
                 });
@@ -259,9 +305,10 @@
                 searchCenter = result.geometry.location;
                 document.getElementById('searchCenterStatus').innerText =
                     'Searching around: Alternative Address';
+                setStatus(`Alt address geocoded: ${result.geometry.location.lat().toFixed(4)}, ${result.geometry.location.lng().toFixed(4)}`);
                 filterAndPlotProviders();
             } catch (e) {
-                alert("Could not geocode that address");
+                alert("Could not geocode that address: " + e.message);
             }
         };
 
@@ -269,13 +316,20 @@
             if (altMarker) altMarker.setMap(null);
             altMarker = null;
             document.getElementById('altAddress').value = '';
-
             if (patientLocation) {
                 searchCenter = patientLocation;
                 map.setCenter(patientLocation);
                 document.getElementById('searchCenterStatus').innerText =
                     'Searching around: Claimant Home';
                 filterAndPlotProviders();
+            } else {
+                searchCenter = null;
+                document.getElementById('searchCenterStatus').innerText =
+                    'Searching around: (none)';
+                providerMarkers.forEach(m => m.setMap(null));
+                providerMarkers = [];
+                document.getElementById('providerCount').innerText =
+                    `${allProviders.length} loaded — enter an address to plot nearby providers`;
             }
         };
 
@@ -287,8 +341,8 @@
             let count = 0;
 
             allProviders.forEach(p => {
-                // === INACTIVE-STATUS GUARD (DISABLED in v3.18) ===
-                // Reinstate this line once Provider_Contract_Status values are curated:
+                // === INACTIVE-STATUS GUARD (DISABLED) ===
+                // Reinstate once Provider_Contract_Status values are curated:
                 // if ((p.Provider_Contract_Status || '').toLowerCase().includes('inactive')) return;
 
                 const types = getServiceTypes(p);
@@ -305,10 +359,8 @@
 
                 const color = getProviderColor(types);
                 const marker = new google.maps.Marker({
-                    position: pos,
-                    map: map,
-                    title: p.Name || 'Provider',
-                    icon: buildProviderIcon(color)
+                    position: pos, map: map,
+                    title: p.Name || 'Provider', icon: buildProviderIcon(color)
                 });
 
                 const servicesHtml = types.length
