@@ -1,16 +1,18 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Find Nearby Providers</title>
+    <title>MagnoliaMap - Find Nearby Providers</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCWYDQ2ruxrrYSKZpwVUkI2uhSRjgb-6uU&libraries=geometry"></script>
     <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
     <style>
-        body { margin: 0; padding: 0; font-family: Arial, sans-serif; }
-        #map { height: 500px; width: 100%; }
+        html, body { margin: 0; padding: 0; height: 100%; font-family: Arial, sans-serif; }
+        #map { height: 100%; width: 100%; }
         #controls {
             background: white; padding: 15px; margin: 10px; border: 1px solid #ccc;
             border-radius: 5px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            max-height: 450px; overflow-y: auto; width: 260px;
+            max-height: 520px; overflow-y: auto; width: 280px; position: absolute; top: 10px; left: 10px; z-index: 1000;
         }
         .control-section { margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #ddd; }
         .control-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
@@ -26,37 +28,29 @@
             font-size: 16px; color: #333; background: white; padding: 20px;
             border-radius: 5px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); z-index: 1000;
         }
-        .assign-btn {
-            background-color: #0066cc; color: white; border: none; padding: 8px 12px;
-            border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 8px; width: 100%;
+        input[type="text"] { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        button { 
+            padding: 8px 12px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-weight: bold;
         }
-        .assign-btn:hover { background-color: #0052a3; }
-        .legend { font-size: 12px; color: #666; }
-        .legend-title { font-weight: bold; margin-bottom: 8px; color: #333; }
-        .provider-count { font-size: 12px; color: #666; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd; }
-        .select-all { font-size: 12px; color: #0066cc; cursor: pointer; margin-left: 10px; }
-        .select-all:hover { text-decoration: underline; }
-        #debug { position: fixed; bottom: 0; left: 0; right: 0; background: #333; color: #0f0; font-family: monospace; font-size: 11px; padding: 8px; max-height: 150px; overflow-y: auto; z-index: 9999; }
+        .plot-btn { background:#4CAF50; color:white; width:100%; margin-top:6px; }
+        .clear-btn { background:#f44336; color:white; width:100%; margin-top:6px; }
     </style>
 </head>
 <body>
     <div id="loading">Initializing Map...</div>
     <div id="map"></div>
-    <div id="debug"></div>
 
     <script>
-        // Debug logger
-        function log(msg) {
-            console.log(msg);
-            var d = document.getElementById('debug');
-            d.innerHTML += new Date().toLocaleTimeString() + ': ' + msg + '<br>';
-            d.scrollTop = d.scrollHeight;
-        }
+        let map, patientMarker, altMarker = null, providerMarkers = [];
+        let currentReferral = {};
+        let patientLocation = null;
+        let currentRadius = 25;
+        let activeServiceTypes = new Set();
 
-        // ** CONFIGURATION **
-        const DEFAULT_SEARCH_RADIUS = 25; // Miles
-        
-        // Service Colors (matches dropdown values exactly)
         const SERVICE_COLORS = {
             'Diagnostic Imaging': '#FFD700',
             'DME': '#FF0000',
@@ -67,63 +61,40 @@
             'PT Direct': '#9932CC'
         };
 
-        // Global State
-        let map, patientMarker, allProviders = [], providerMarkers = [];
-        let currentReferral = {};
-        let patientLocation = null;
-        let currentRadius = DEFAULT_SEARCH_RADIUS;
-        let activeServiceTypes = new Set(Object.keys(SERVICE_COLORS));
-        let referralServiceType = null; // Will be set from referral data
+        function log(msg) {
+            console.log('[MagnoliaMap]', msg);
+        }
 
-        log('Script loaded, initializing SDK...');
-
-        // Initialize ZOHO SDK
-        ZOHO.embeddedApp.on("PageLoad", function(data){
-            log('PageLoad event fired: ' + JSON.stringify(data));
-            if(data && data.EntityId){
+        ZOHO.embeddedApp.on("PageLoad", function(data) {
+            if (data && data.EntityId) {
                 loadReferralData(data.EntityId);
             }
         });
-        
-        ZOHO.embeddedApp.init().then(function(){
-            log('SDK initialized successfully');
-            document.getElementById('loading').innerHTML = "Loading Referral Data...";
-        }).catch(function(err){
-            log('SDK init error: ' + err);
+
+        ZOHO.embeddedApp.init().then(function() {
+            document.getElementById('loading').innerHTML = "Loading referral data...";
         });
 
-        // Load Referral Data
         async function loadReferralData(recordId) {
-            log('Loading referral: ' + recordId);
             try {
-                const response = await ZOHO.CRM.API.getRecord({Entity: "Potentials", RecordID: recordId});
-                log('Referral response: ' + (response.data ? response.data.length + ' records' : 'no data'));
-                if(response.data && response.data.length > 0){
+                const response = await ZOHO.CRM.API.getRecord({Entity: "Deals", RecordID: recordId});
+                if (response.data && response.data.length > 0) {
                     currentReferral = response.data[0];
-                    log('Referral loaded: ' + currentReferral.Deal_Name);
-                    
-                    // Auto-filter to referral's service type if available
-                    referralServiceType = currentReferral.Service_Type;
-                    if(referralServiceType && SERVICE_COLORS[referralServiceType]) {
-                        activeServiceTypes = new Set([referralServiceType]);
-                        log('Auto-filtering to service type: ' + referralServiceType);
+                    if (currentReferral.Service_Type) {
+                        activeServiceTypes = new Set([currentReferral.Service_Type]);
                     }
-                    
                     initMap();
                 }
             } catch (e) {
-                log('ERROR loading referral: ' + e);
                 document.getElementById('loading').innerHTML = "Error loading referral data.";
             }
         }
 
-        // Initialize Map
         function initMap() {
-            log('Initializing map...');
             map = new google.maps.Map(document.getElementById('map'), {
                 center: { lat: 27.9506, lng: -82.4572 },
                 zoom: 10,
-                mapTypeControl: false, 
+                mapTypeControl: false,
                 streetViewControl: false
             });
 
@@ -131,418 +102,182 @@
             map.controls[google.maps.ControlPosition.LEFT_TOP].push(controls);
 
             plotPatientLocation();
-        }
-
-        function plotPatientLocation() {
-            const street = currentReferral.Claimant_St_Address || currentReferral.Claimant_St_Address_1 || '';
-            const city = currentReferral.Claimant_City || '';
-            const state = currentReferral.Claimant_State || '';
-            const zip = currentReferral.Claimant_Zip || '';
-            
-            const address = `${street}, ${city}, ${state} ${zip}`.trim();
-            log('Patient address: ' + address);
-            
-            if(address.length < 10 || !city) {
-                document.getElementById('loading').innerHTML = "⚠️ Patient address incomplete.";
-                return;
-            }
-
-            document.getElementById('loading').innerHTML = "Geocoding patient address...";
-
-            const geocoder = new google.maps.Geocoder();
-            geocoder.geocode({ 'address': address }, function(results, status) {
-                log('Geocode status: ' + status);
-                if (status === 'OK') {
-                    patientLocation = results[0].geometry.location;
-                    log('Patient location: ' + patientLocation.lat() + ', ' + patientLocation.lng());
-                    map.setCenter(patientLocation);
-                    
-                    patientMarker = new google.maps.Marker({
-                        map: map, 
-                        position: patientLocation,
-                        icon: { 
-                            path: google.maps.SymbolPath.CIRCLE, 
-                            scale: 12, 
-                            fillColor: '#1976D2', 
-                            fillOpacity: 1, 
-                            strokeColor: 'white', 
-                            strokeWeight: 3 
-                        },
-                        title: "Patient Location",
-                        zIndex: 1000
-                    });
-
-                    fetchProviders();
-                } else {
-                    log('Geocode FAILED: ' + status);
-                    document.getElementById('loading').innerHTML = "❌ Could not geocode address.";
-                }
-            });
-        }
-
-        async function fetchProviders() {
-            document.getElementById('loading').innerHTML = "Fetching providers...";
-            
-            // Get patient's state for filtering
-            let patientState = currentReferral.Claimant_State || '';
-            log('v3.11 - Fetching providers in state: "' + patientState + '"');
-            
-            // State abbreviation mapping
-            const stateAbbrev = {
-                'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
-                'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'Florida': 'FL', 'Georgia': 'GA',
-                'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA',
-                'Kansas': 'KS', 'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD',
-                'Massachusetts': 'MA', 'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO',
-                'Montana': 'MT', 'Nebraska': 'NE', 'Nevada': 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ',
-                'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', 'Ohio': 'OH',
-                'Oklahoma': 'OK', 'Oregon': 'OR', 'Pennsylvania': 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC',
-                'South Dakota': 'SD', 'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT',
-                'Virginia': 'VA', 'Washington': 'WA', 'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY'
-            };
-            
-            // Convert full state name to abbreviation if needed
-            if(patientState.length > 2 && stateAbbrev[patientState]) {
-                patientState = stateAbbrev[patientState];
-                log('Converted to abbreviation: ' + patientState);
-            }
-            
-            try {
-                let response;
-                
-                if(patientState) {
-                    // Use COQL to filter by state (much more efficient)
-                    log('Using COQL query for state: ' + patientState);
-                    response = await ZOHO.CRM.API.coql({
-                        select_query: `select Name, Provider_Contract_Status, Location_Services_Offered, Provider_Latitude, Provider_Longitude, Provider_Phone, Provider_Address_Street_1, Provider_Address_City, Provider_Address_State, Provider_Address_Zip from Providers where Provider_Address_State = '${patientState}'`
-                    });
-                } else {
-                    // Fallback: get all (limited to 200)
-                    log('No state found, fetching all providers');
-                    response = await ZOHO.CRM.API.getAllRecords({
-                        Entity: "Providers", 
-                        per_page: 200
-                    });
-                }
-                
-                log('Provider response keys: ' + Object.keys(response || {}).join(', '));
-                
-                // Check for API error in response
-                if(response.status && response.status === 'error') {
-                    log('API returned error: ' + JSON.stringify(response));
-                    throw new Error(response.message || 'API error');
-                }
-                
-                log('Provider response: ' + JSON.stringify(response).substring(0, 300));
-                
-                if(response.data){
-                    allProviders = response.data;
-                    log('Loaded ' + allProviders.length + ' providers');
-                    
-                    // Debug: show first provider's fields
-                    if(allProviders.length > 0) {
-                        var p = allProviders[0];
-                        log('First provider: ' + p.Name);
-                        log('  Contract Status: ' + p.Provider_Contract_Status);
-                        log('  Services Offered: ' + p.Location_Services_Offered);
-                        log('  Lat: ' + p.Provider_Latitude + ', Lng: ' + p.Provider_Longitude);
-                    }
-                    
-                    // Log referral's service type for filtering
-                    log('Referral needs Service_Type: ' + currentReferral.Service_Type);
-                    
-                    // Count by status
-                    var statusCounts = {};
-                    allProviders.forEach(function(p) {
-                        var s = p.Provider_Contract_Status || 'null';
-                        statusCounts[s] = (statusCounts[s] || 0) + 1;
-                    });
-                    log('Providers by status: ' + JSON.stringify(statusCounts));
-                    
-                    // Count with coordinates
-                    var withCoords = allProviders.filter(function(p) {
-                        return p.Provider_Latitude && p.Provider_Longitude;
-                    }).length;
-                    log('Providers with coordinates: ' + withCoords);
-                    
-                    filterAndPlotProviders();
-                    
-                    // Retry filter creation (Google Maps controls may take time to appear in DOM)
-                    setTimeout(function() {
-                        createFilterCheckboxes();
-                    }, 100);
-                    
-                    // Show referral's service type need
-                    if(referralServiceType) {
-                        var needEl = document.getElementById('referralNeed');
-                        var dispEl = document.getElementById('referralServiceDisplay');
-                        if(needEl) needEl.style.display = 'block';
-                        if(dispEl) dispEl.innerText = referralServiceType;
-                    }
-                    
-                    var loadingEl = document.getElementById('loading');
-                    if(loadingEl) loadingEl.style.display = 'none';
-                } else {
-                    log('No provider data returned');
-                    document.getElementById('loading').innerHTML = "No providers found.";
-                }
-            } catch (e) {
-                // Better error logging
-                var errMsg = e;
-                if(typeof e === 'object') {
-                    errMsg = JSON.stringify(e, null, 2);
-                    if(e.message) errMsg = e.message;
-                    if(e.responseText) errMsg = e.responseText;
-                }
-                log('ERROR fetching providers: ' + errMsg);
-                log('Error type: ' + typeof e);
-                if(e && e.status) log('Error status: ' + e.status);
-                if(e && e.code) log('Error code: ' + e.code);
-                document.getElementById('loading').innerHTML = "Error loading providers. Check debug log.";
-            }
-        }
-
-        function getProviderServiceTypes(provider) {
-            // Use the new multi-select field: Location_Services_Offered
-            const serviceType = provider.Location_Services_Offered;
-            if (!serviceType) return [];
-            if (Array.isArray(serviceType)) return serviceType;
-            if (typeof serviceType === 'string') return serviceType.split(';').map(s => s.trim());
-            return [];
-        }
-
-        function filterAndPlotProviders() {
-            providerMarkers.forEach(m => m.setMap(null));
-            providerMarkers = [];
-
-            let visibleCount = 0;
-            let skippedNoCoords = 0;
-            let skippedInactive = 0;
-            let skippedServiceType = 0;
-            let skippedDistance = 0;
-
-            allProviders.forEach(provider => {
-                const status = provider.Provider_Contract_Status || '';
-                const serviceTypes = getProviderServiceTypes(provider);
-                
-                // Filter: Skip only explicitly inactive/suspended/terminated
-                // (Allow null/empty status - treat as active for now)
-                if(status === 'Inactive' || status === 'Suspended' || status === 'Terminated') {
-                    skippedInactive++;
-                    return;
-                }
-
-                // Filter: Must have at least one active service type selected
-                const hasActiveType = serviceTypes.some(type => activeServiceTypes.has(type));
-                if(!hasActiveType && serviceTypes.length > 0) {
-                    skippedServiceType++;
-                    return;
-                }
-
-                // Get coordinates
-                const lat = parseFloat(provider.Provider_Latitude);
-                const lng = parseFloat(provider.Provider_Longitude);
-
-                if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
-                    skippedNoCoords++;
-                    return;
-                }
-
-                const pos = new google.maps.LatLng(lat, lng);
-                const distanceMeters = google.maps.geometry.spherical.computeDistanceBetween(patientLocation, pos);
-                const distanceMiles = distanceMeters * 0.000621371;
-
-                if(distanceMiles > currentRadius) {
-                    skippedDistance++;
-                    return;
-                }
-
-                // Plot it!
-                const primaryType = serviceTypes[0] || 'Default';
-                const color = SERVICE_COLORS[primaryType] || '#808080';
-                
-                const marker = new google.maps.Marker({
-                    map: map, 
-                    position: pos,
-                    icon: { 
-                        path: google.maps.SymbolPath.CIRCLE, 
-                        scale: 8, 
-                        fillColor: color, 
-                        fillOpacity: 0.85, 
-                        strokeColor: 'white', 
-                        strokeWeight: 1.5 
-                    },
-                    title: provider.Name
-                });
-
-                const serviceTypeDisplay = serviceTypes.join(', ') || 'Not specified';
-                
-                // Build address string
-                const addressParts = [
-                    provider.Provider_Address_Street_1,
-                    provider.Provider_Address_City,
-                    provider.Provider_Address_State,
-                    provider.Provider_Address_Zip
-                ].filter(Boolean);
-                const addressDisplay = addressParts.join(', ') || '';
-                
-                const infoContent = `
-                    <div style="padding:5px; width:250px; font-family: Arial, sans-serif;">
-                        <strong style="font-size:14px;">${provider.Name}</strong><br>
-                        <div style="color:#666; font-size:12px; margin:5px 0;">
-                            <div>📍 ${distanceMiles.toFixed(1)} miles away</div>
-                            ${addressDisplay ? '<div>🏠 ' + addressDisplay + '</div>' : ''}
-                            <div>🏥 ${serviceTypeDisplay}</div>
-                            ${provider.Provider_Phone ? '<div>📞 ' + provider.Provider_Phone + '</div>' : ''}
-                        </div>
-                        <button class="assign-btn" onclick="assignProvider('${provider.id}', '${provider.Name.replace(/'/g, "\\'")}')">
-                            ✓ Assign This Provider
-                        </button>
-                    </div>
-                `;
-
-                const infoWindow = new google.maps.InfoWindow({ content: infoContent });
-                marker.addListener('click', () => infoWindow.open(map, marker));
-
-                providerMarkers.push(marker);
-                visibleCount++;
-            });
-
-            log('Filter results: ' + visibleCount + ' visible, ' + skippedInactive + ' inactive, ' + skippedNoCoords + ' no coords, ' + skippedServiceType + ' wrong type, ' + skippedDistance + ' too far');
-            updateProviderCount(visibleCount);
-        }
-
-        function assignProvider(id, name) {
-            const existingProvider = currentReferral.Provider_Name;
-            const actionText = existingProvider ? 'REASSIGN' : 'Assign';
-            
-            if(!confirm(`${actionText} "${name}" to this referral?`)) return;
-            
-            log('Assigning provider: ' + id + ' (existing: ' + JSON.stringify(existingProvider) + ')');
-            
-            // Use record ID format for lookup field update
-            const updateData = {
-                "id": currentReferral.id,
-                "Provider_Name": id,  // Try just the ID string for updates
-                "Stage": "Scheduled"
-            };
-            
-            log('Update payload: ' + JSON.stringify(updateData));
-            
-            ZOHO.CRM.API.updateRecord({
-                Entity: "Potentials",
-                APIData: updateData,
-                Trigger: ["workflow"]  // Trigger workflows on update
-            }).then(function(data) {
-                log('Assign success: ' + JSON.stringify(data));
-                alert("✅ Assigned " + name + "!\n\nStage updated to 'Scheduled'.");
-                // Force full page reload to refresh lookup field display
-                window.top.location.reload();
-            }).catch(function(err) {
-                log('Assign ERROR: ' + JSON.stringify(err));
-                alert("❌ Error assigning provider: " + (err.message || JSON.stringify(err)));
-            });
+            document.getElementById('loading').style.display = 'none';
         }
 
         function createControlsPanel() {
-            const div = document.createElement('div');
-            div.id = 'controls';
-            div.innerHTML = `
+            const panel = document.createElement('div');
+            panel.id = 'controls';
+            panel.innerHTML = `
                 <div class="control-section">
-                    <h4>🔍 Search Radius: <span id="radVal">${currentRadius}</span> mi</h4>
-                    <input type="range" min="5" max="100" value="${currentRadius}" 
-                           style="width:100%;" onchange="updateRadius(this.value)">
+                    <h4>Search Radius: <span id="radVal">${currentRadius}</span> mi</h4>
+                    <input type="range" min="5" max="100" value="${currentRadius}" style="width:100%;" onchange="updateRadius(this.value)">
                 </div>
                 <div class="control-section">
-                    <h4>Filter by Service Type <span class="select-all" onclick="toggleAllServices()">[toggle all]</span></h4>
-                    <div id="referralNeed" style="background:#e3f2fd; padding:6px 8px; border-radius:4px; margin-bottom:8px; font-size:12px; display:none;">
-                        🎯 Referral needs: <strong id="referralServiceDisplay"></strong>
-                    </div>
+                    <h4>Filter by Service Type</h4>
                     <div id="serviceFilters"></div>
                 </div>
-                <div class="provider-count" id="providerCount">Loading...</div>
+                <div class="control-section">
+                    <h4>Plot Alternative Address</h4>
+                    <input type="text" id="altAddress" placeholder="e.g. Work, school, or family address">
+                    <button class="plot-btn" onclick="plotAlternativeAddress()">Plot Address</button>
+                    <button class="clear-btn" onclick="clearAlternativeAddress()">Clear Alternative Marker</button>
+                </div>
+                <div class="provider-count" id="providerCount">Loading providers...</div>
             `;
-            return div;
+
+            setTimeout(() => {
+                const container = panel.querySelector('#serviceFilters');
+                Object.keys(SERVICE_COLORS).forEach(type => {
+                    const checked = activeServiceTypes.has(type) ? 'checked' : '';
+                    const div = document.createElement('div');
+                    div.className = 'checkbox-item';
+                    div.innerHTML = `
+                        <input type="checkbox" ${checked} onchange="toggleServiceType('${type}', this.checked)">
+                        <span class="color-dot" style="background:${SERVICE_COLORS[type]}"></span>
+                        <label>${type}</label>
+                    `;
+                    container.appendChild(div);
+                });
+            }, 100);
+
+            return panel;
         }
 
-        function createFilterCheckboxes() {
-            const container = document.getElementById('serviceFilters');
-            log('createFilterCheckboxes: container found = ' + (container ? 'yes' : 'NO'));
-            if (!container) {
-                log('ERROR: serviceFilters container not found!');
+        function updateRadius(newRadius) {
+            currentRadius = parseInt(newRadius);
+            document.getElementById('radVal').innerText = newRadius;
+            if (patientLocation) plotProviders();
+        }
+
+        function toggleServiceType(type, isChecked) {
+            if (isChecked) activeServiceTypes.add(type);
+            else activeServiceTypes.delete(type);
+            if (patientLocation) plotProviders();
+        }
+
+        async function plotPatientLocation() {
+            const address = [
+                currentReferral.Street_Address || currentReferral.Street_Address_1 || '',
+                currentReferral.Claimant_City || '',
+                currentReferral.State || '',
+                currentReferral.Zip || ''
+            ].filter(Boolean).join(', ');
+
+            if (!address || address.length < 10) {
+                document.getElementById('loading').innerHTML = "⚠️ Patient address is incomplete.";
                 return;
             }
 
-            const typeCounts = {};
-            allProviders.forEach(p => {
-                // Skip only explicitly inactive
-                var status = p.Provider_Contract_Status || '';
-                if (status === 'Inactive' || status === 'Suspended' || status === 'Terminated') return;
-                getProviderServiceTypes(p).forEach(type => {
-                    typeCounts[type] = (typeCounts[type] || 0) + 1;
+            try {
+                const geocoder = new google.maps.Geocoder();
+                const result = await new Promise((resolve, reject) => {
+                    geocoder.geocode({ address: address }, (results, status) => {
+                        if (status === "OK") resolve(results[0]);
+                        else reject(status);
+                    });
                 });
-            });
 
-            log('Service type counts: ' + JSON.stringify(typeCounts));
-            
-            let filtersHtml = '';
+                patientLocation = result.geometry.location;
+                map.setCenter(patientLocation);
+                map.setZoom(12);
 
-            Object.keys(SERVICE_COLORS).forEach(type => {
-                const color = SERVICE_COLORS[type];
-                const count = typeCounts[type] || 0;
-                const checked = activeServiceTypes.has(type) ? 'checked' : '';
-                
-                filtersHtml += `
-                    <div class="checkbox-item">
-                        <input type="checkbox" id="filter_${type}" ${checked} onchange="toggleServiceType('${type}')">
-                        <label for="filter_${type}">
-                            <span class="color-dot" style="background:${color};"></span>
-                            ${type}
-                            <span class="count-badge">${count}</span>
-                        </label>
-                    </div>
-                `;
-            });
+                patientMarker = new google.maps.Marker({
+                    position: patientLocation,
+                    map: map,
+                    title: currentReferral.Last_First || "Patient",
+                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png" }
+                });
 
-            container.innerHTML = filtersHtml;
-        }
-
-        window.updateRadius = function(val) {
-            currentRadius = parseInt(val);
-            document.getElementById('radVal').innerText = val;
-            log('Radius changed to ' + val);
-            if(patientLocation) filterAndPlotProviders();
-        }
-
-        window.toggleServiceType = function(type) {
-            if(activeServiceTypes.has(type)) {
-                activeServiceTypes.delete(type);
-            } else {
-                activeServiceTypes.add(type);
+                plotProviders();
+            } catch (e) {
+                document.getElementById('loading').innerHTML = "⚠️ Could not geocode patient address.";
             }
-            log('Toggled service type: ' + type);
-            filterAndPlotProviders();
         }
 
-        window.toggleAllServices = function() {
-            const allEnabled = activeServiceTypes.size === Object.keys(SERVICE_COLORS).length;
-            if(allEnabled) {
-                activeServiceTypes.clear();
-            } else {
-                activeServiceTypes = new Set(Object.keys(SERVICE_COLORS));
+        window.plotAlternativeAddress = async function() {
+            const input = document.getElementById('altAddress');
+            const address = input.value.trim();
+            if (!address) {
+                alert("Please enter an address first.");
+                return;
             }
-            Object.keys(SERVICE_COLORS).forEach(type => {
-                const cb = document.getElementById('filter_' + type);
-                if(cb) cb.checked = activeServiceTypes.has(type);
-            });
-            filterAndPlotProviders();
+
+            try {
+                const geocoder = new google.maps.Geocoder();
+                const result = await new Promise((resolve, reject) => {
+                    geocoder.geocode({ address: address }, (results, status) => {
+                        if (status === "OK") resolve(results[0]);
+                        else reject(status);
+                    });
+                });
+
+                const altLocation = result.geometry.location;
+
+                if (altMarker) altMarker.setMap(null);
+
+                altMarker = new google.maps.Marker({
+                    position: altLocation,
+                    map: map,
+                    title: "Alternative Location",
+                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" }
+                });
+
+                map.setCenter(altLocation);
+                map.setZoom(13);
+
+            } catch (e) {
+                alert("Could not find that address. Please try a more specific location.");
+            }
+        };
+
+        window.clearAlternativeAddress = function() {
+            if (altMarker) {
+                altMarker.setMap(null);
+                altMarker = null;
+            }
+            document.getElementById('altAddress').value = '';
+            if (patientLocation) {
+                map.setCenter(patientLocation);
+                map.setZoom(12);
+            }
+        };
+
+        async function plotProviders() {
+            if (!patientLocation) return;
+
+            providerMarkers.forEach(m => m.setMap(null));
+            providerMarkers = [];
+
+            try {
+                const providers = await ZOHO.CRM.API.getAllRecords({Entity: "Accounts", page:1, per_page:200});
+                const filtered = providers.data.filter(p => {
+                    if (!p.Latitude || !p.Longitude) return false;
+                    const providerLoc = new google.maps.LatLng(p.Latitude, p.Longitude);
+                    const distance = google.maps.geometry.spherical.computeDistanceBetween(patientLocation, providerLoc) / 1609.34;
+                    return distance <= currentRadius && activeServiceTypes.has(p.Service_Type);
+                });
+
+                filtered.forEach(provider => {
+                    const loc = new google.maps.LatLng(provider.Latitude, provider.Longitude);
+                    const marker = new google.maps.Marker({
+                        position: loc,
+                        map: map,
+                        title: provider.Account_Name,
+                        icon: { url: "http://maps.google.com/mapfiles/ms/icons/red-dot.png" }
+                    });
+                    providerMarkers.push(marker);
+                });
+
+                updateProviderCount(providerMarkers.length);
+            } catch (e) {
+                console.error('Provider search error:', e);
+            }
         }
 
         function updateProviderCount(count) {
             const el = document.getElementById('providerCount');
-            if(el) {
-                el.innerHTML = `<strong>${count}</strong> provider${count !== 1 ? 's' : ''} within ${currentRadius} miles`;
-            }
+            if (el) el.innerHTML = `<strong>${count}</strong> provider${count !== 1 ? 's' : ''} within ${currentRadius} miles`;
         }
     </script>
 </body>
