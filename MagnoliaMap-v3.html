@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagnoliaMap - Find Nearby Providers</title>
+    <title>MagnoliaMap v3.19 - Find Nearby Providers</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCWYDQ2ruxrrYSKZpwVUkI2uhSRjgb-6uU&libraries=geometry"></script>
@@ -28,7 +28,8 @@
         .clear-btn { background:#f44336; color:white; }
         .info-window h4 { margin: 0 0 6px 0; font-size: 14px; }
         .info-window .services { font-size: 12px; color: #555; }
-        .info-window .distance { font-size: 12px; color: #888; margin-top: 4px; }
+        .info-window .meta { font-size: 12px; color: #888; margin-top: 4px; }
+        .info-window .status { font-size: 11px; color: #aaa; margin-top: 2px; }
         #searchCenterStatus { font-size: 12px; color: #555; font-style: italic; margin-top: 6px; }
     </style>
 </head>
@@ -37,19 +38,24 @@
     <div id="map"></div>
 
     <script>
-        // === MagnoliaMap v3.17 ===
-        // Fixes vs v3.16:
-        //   1. COQL query corrected to use API name "CustomModule13" (label is "Providers")
-        //   2. Service type filter checkboxes inlined to eliminate setTimeout race condition
-        //   3. Provider markers now color-coded by Location_Services_Offered
-        //   4. Manual ("alternative") address now re-pivots the radius search and re-plots providers
+        // === MagnoliaMap v3.19 ===
+        // Changes vs v3.18:
+        //   - Module reference updated from "CustomModule13" to "Providers" — the latter
+        //     is the canonical API Name as configured in Zoho. ("CustomModule13" is the
+        //     internal module identifier, which COQL also accepts but is non-canonical.)
+        //
+        // Previous changes (v3.18):
+        //   - Removed the auto-filter on Provider_Contract_Status containing "inactive"
+        //     because all current Providers carry that status pending data curation.
+        //     Restore the guarded line marked "INACTIVE-STATUS GUARD" in
+        //     filterAndPlotProviders() once status data is curated.
 
-        const PROVIDERS_MODULE_API_NAME = "CustomModule13"; // Module label = "Providers"
+        const PROVIDERS_MODULE_API_NAME = "Providers"; // Canonical API Name (internal id: CustomModule13)
 
         let map, patientMarker, altMarker = null, providerMarkers = [], infoWindow;
         let currentReferral = {};
         let patientLocation = null;
-        let searchCenter = null;        // <-- drives radius filtering; defaults to patient, follows alt address
+        let searchCenter = null;
         let currentRadius = 25;
         let activeServiceTypes = new Set();
         let allProviders = [];
@@ -65,7 +71,7 @@
         };
 
         function log(msg) {
-            console.log('[MagnoliaMap v3.17]', msg);
+            console.log('[MagnoliaMap v3.19]', msg);
         }
 
         ZOHO.embeddedApp.on("PageLoad", function(data) {
@@ -98,9 +104,6 @@
             plotPatientLocation();
         }
 
-        // --- FIX #2: Inline the filter checkboxes directly in the panel HTML.
-        //    The previous setTimeout(createFilterCheckboxes, 300) was unreliable
-        //    because Google Maps can defer attaching the control to the DOM.
         function createControlsPanel() {
             const panel = document.createElement('div');
             panel.id = 'controls';
@@ -164,7 +167,7 @@
                     geocoder.geocode({ address }, (res, status) => status === "OK" && r(res[0]))
                 );
                 patientLocation = result.geometry.location;
-                searchCenter = patientLocation; // default radius search center
+                searchCenter = patientLocation;
                 map.setCenter(patientLocation);
                 map.setZoom(11);
 
@@ -180,7 +183,6 @@
             } catch (e) { log('Geocode failed: ' + e); }
         }
 
-        // --- FIX #1: Use API name (CustomModule13), not the module label ("Providers").
         async function loadProviders() {
             log(`Running COQL query on ${PROVIDERS_MODULE_API_NAME}...`);
             try {
@@ -212,10 +214,6 @@
             return String(v).split(';').map(s => s.trim()).filter(Boolean);
         }
 
-        // --- FIX #3 helper: pick the marker color based on service types.
-        //    If filters are active, prefer the first matching active filter so the
-        //    visual matches what the user is searching for. Otherwise, take the
-        //    first defined service color. Fall back to "Other" gray.
         function getProviderColor(types) {
             if (activeServiceTypes.size > 0) {
                 for (const t of types) {
@@ -239,7 +237,6 @@
             };
         }
 
-        // --- FIX #4: Manual address now becomes the radius search center.
         window.plotAlternativeAddress = async function() {
             const addr = document.getElementById('altAddress').value.trim();
             if (!addr) return alert("Enter an address");
@@ -259,7 +256,6 @@
                 map.setCenter(result.geometry.location);
                 map.setZoom(12);
 
-                // Re-pivot the radius search around the new pin and re-plot providers.
                 searchCenter = result.geometry.location;
                 document.getElementById('searchCenterStatus').innerText =
                     'Searching around: Alternative Address';
@@ -274,7 +270,6 @@
             altMarker = null;
             document.getElementById('altAddress').value = '';
 
-            // Restore claimant home as the radius search center and re-plot.
             if (patientLocation) {
                 searchCenter = patientLocation;
                 map.setCenter(patientLocation);
@@ -292,14 +287,16 @@
             let count = 0;
 
             allProviders.forEach(p => {
-                if ((p.Provider_Contract_Status || '').toLowerCase().includes('inactive')) return;
+                // === INACTIVE-STATUS GUARD (DISABLED in v3.18) ===
+                // Reinstate this line once Provider_Contract_Status values are curated:
+                // if ((p.Provider_Contract_Status || '').toLowerCase().includes('inactive')) return;
 
                 const types = getServiceTypes(p);
                 if (activeServiceTypes.size > 0 && !types.some(t => activeServiceTypes.has(t))) return;
 
                 const lat = parseFloat(p.Provider_Latitude);
                 const lng = parseFloat(p.Provider_Longitude);
-                if (!lat || !lng) return;
+                if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return;
 
                 const pos = new google.maps.LatLng(lat, lng);
                 const distMiles =
@@ -326,7 +323,8 @@
                         <div class="info-window">
                             <h4>${p.Name || 'Provider'}</h4>
                             <div class="services">${servicesHtml}</div>
-                            <div class="distance">${distMiles.toFixed(1)} mi from search center</div>
+                            <div class="meta">${distMiles.toFixed(1)} mi from search center</div>
+                            <div class="status">Status: ${p.Provider_Contract_Status || '(none)'}</div>
                         </div>
                     `);
                     infoWindow.open(map, marker);
