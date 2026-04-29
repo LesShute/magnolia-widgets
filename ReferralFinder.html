@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Magnolia ReferralFinder</title>
+    <title>Magnolia ReferralFinder v1.1</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
@@ -229,27 +229,28 @@
     </div>
 
     <script>
-        // === ReferralFinder v1.0 ===
+        // === ReferralFinder v1.1 ===
         // Implements spec from ReferralFinder-CHECKLIST.md (verified 2026-04-29).
         //
-        // Changes vs baseline:
-        //   - Section 6.2: Two-step query pattern for Payer Name (Account_Name)
-        //                  and Adjuster Name (Contact_Name) Lookup fields.
-        //                  Direct LIKE on Lookup columns produces INVALID_QUERY
-        //                  (Quirk 11.4). Resolves to source module IDs first,
-        //                  then filters Deals by `... in (...)` clause.
-        //   - Section 5: Style-2 two-row results layout. Primary row carries
-        //                existing columns; secondary row spans full width and
-        //                shows Payer and Adjuster names.
-        //   - Section 6.3: Specific error messages for empty Lookup pre-search
-        //                  results (e.g. "No payers match 'xyz'").
+        // Fixes vs v1.0:
+        //   - Issue: Payer/Adjuster names rendered as "[object Object]" in
+        //     results because COQL responses don't expand Lookup fields the
+        //     same way getRecord() does. Solution: maintain a client-side
+        //     ID→displayName map populated from step-1 queries (Section 11.6,
+        //     new quirk). Resolved on render via lookupName() helper.
+        //   - Issue: Adjuster-only search produced INVALID_QUERY on
+        //     Contact_Name. Root cause was the step-1 Contacts query failing
+        //     to match natural-language adjuster names like "karen kyota"
+        //     because LIKE matched the whole string against single fields.
+        //     Solution: split the search term on whitespace and OR-match each
+        //     token against both name fields. Also hardened the empty-IDs
+        //     short-circuit to be defensive about edge cases.
+        //   - Diagnostic instrumentation: every step logs structured progress
+        //     so future "still failing" reports can be triaged from console.
         //
-        // Side-bugs intentionally retained per Option A scope (see Section 12):
-        //   - Duplicate Open Case button (12.1)
-        //   - Hardcoded status colors don't match real picklist values (12.2)
-        //   - sanitize() uses backslash-escaping instead of doubled-quote (12.3)
+        // Side-bugs from v1.0 still retained per Option A scope (Section 12).
 
-        function log(msg) { console.log('[ReferralFinder v1.0]', msg); }
+        function log(msg) { console.log('[ReferralFinder v1.1]', msg); }
 
         ZOHO.embeddedApp.init().then(function(){
             log("Widget loaded");
@@ -278,32 +279,118 @@
         }
 
         // --- Two-step Lookup query helpers (Section 6.2) ---
+        //
+        // v1.1: Helpers now return both the IDs (for the step-2 IN clause) AND
+        // a Map<id, displayName> so the results table can render the actual
+        // payer/adjuster names. COQL responses for Lookup fields don't include
+        // expanded display names by default, so we resolve them here.
 
-        // Resolves a Payer Name search term to a list of Account record IDs.
-        // Returns { ids: string[], hadTerm: boolean } so callers can distinguish
-        // "user didn't search by Payer" from "user searched but no Accounts matched".
+        // Module-level maps that accumulate display names across searches.
+        const accountNameById = new Map();   // Account.id -> Account_Name
+        const contactNameById = new Map();   // Contact.id -> "Last, First"
+
         async function resolvePayerIds(searchTerm) {
-            if (!searchTerm) return { ids: null, hadTerm: false };
+            if (!searchTerm || !searchTerm.trim()) {
+                return { ids: null, hadTerm: false };
+            }
             const cleaned = sanitize(searchTerm);
             const query = "select id, Account_Name from Accounts where Account_Name like '%" + cleaned + "%' limit 200";
             log('Step 1 query (Accounts): ' + query);
             const resp = await ZOHO.CRM.API.coql({ select_query: query });
             const records = resp.data || [];
             log('Step 1 returned ' + records.length + ' Account(s)');
+            // Populate the display-name map for later rendering.
+            records.forEach(r => {
+                if (r.id && r.Account_Name) accountNameById.set(r.id, r.Account_Name);
+            });
             return { ids: records.map(r => r.id), hadTerm: true };
         }
 
-        // Resolves an Adjuster Name search term to a list of Contact record IDs.
-        // Searches both First_Name and Last_Name with OR so the user can type either.
         async function resolveAdjusterIds(searchTerm) {
-            if (!searchTerm) return { ids: null, hadTerm: false };
-            const cleaned = sanitize(searchTerm);
-            const query = "select id, First_Name, Last_Name from Contacts where (Last_Name like '%" + cleaned + "%' or First_Name like '%" + cleaned + "%') limit 200";
+            if (!searchTerm || !searchTerm.trim()) {
+                return { ids: null, hadTerm: false };
+            }
+            // v1.1 fix: split natural-language input like "karen kyota" into
+            // tokens and AND-match across First_Name + Last_Name. Each token
+            // must match SOMEWHERE in either field. This is the closest COQL
+            // can get to "fuzzy full-name match" without a dedicated full-text
+            // search facility.
+            const tokens = searchTerm.trim().split(/\s+/).filter(Boolean);
+            if (tokens.length === 0) {
+                return { ids: null, hadTerm: false };
+            }
+            const tokenClauses = tokens.map(t => {
+                const c = sanitize(t);
+                return "(Last_Name like '%" + c + "%' or First_Name like '%" + c + "%')";
+            });
+            const query = "select id, First_Name, Last_Name from Contacts where " +
+                tokenClauses.join(' and ') + " limit 200";
             log('Step 1 query (Contacts): ' + query);
             const resp = await ZOHO.CRM.API.coql({ select_query: query });
             const records = resp.data || [];
             log('Step 1 returned ' + records.length + ' Contact(s)');
+            records.forEach(r => {
+                if (r.id) {
+                    const display = [r.Last_Name, r.First_Name].filter(Boolean).join(', ');
+                    contactNameById.set(r.id, display || '(unnamed contact)');
+                }
+            });
             return { ids: records.map(r => r.id), hadTerm: true };
+        }
+
+        // After step 2 returns results, fill in any Lookup display names that
+        // weren't already resolved during step 1. This handles the case where
+        // the user didn't search by Payer/Adjuster — we still want to show
+        // those names in the secondary row of the results table.
+        async function backfillLookupNames(records) {
+            const accountIdsToFetch = new Set();
+            const contactIdsToFetch = new Set();
+
+            records.forEach(r => {
+                const accId = lookupRawId(r.Account_Name);
+                if (accId && !accountNameById.has(accId)) accountIdsToFetch.add(accId);
+                const conId = lookupRawId(r.Contact_Name);
+                if (conId && !contactNameById.has(conId)) contactIdsToFetch.add(conId);
+            });
+
+            const tasks = [];
+            if (accountIdsToFetch.size > 0) {
+                const ids = Array.from(accountIdsToFetch).map(id => "'" + id + "'").join(',');
+                const q = "select id, Account_Name from Accounts where id in (" + ids + ") limit 200";
+                log('Backfill query (Accounts): ' + q);
+                tasks.push(
+                    ZOHO.CRM.API.coql({ select_query: q }).then(resp => {
+                        (resp.data || []).forEach(r => {
+                            if (r.id && r.Account_Name) accountNameById.set(r.id, r.Account_Name);
+                        });
+                    })
+                );
+            }
+            if (contactIdsToFetch.size > 0) {
+                const ids = Array.from(contactIdsToFetch).map(id => "'" + id + "'").join(',');
+                const q = "select id, First_Name, Last_Name from Contacts where id in (" + ids + ") limit 200";
+                log('Backfill query (Contacts): ' + q);
+                tasks.push(
+                    ZOHO.CRM.API.coql({ select_query: q }).then(resp => {
+                        (resp.data || []).forEach(r => {
+                            if (r.id) {
+                                const display = [r.Last_Name, r.First_Name].filter(Boolean).join(', ');
+                                contactNameById.set(r.id, display || '(unnamed contact)');
+                            }
+                        });
+                    })
+                );
+            }
+            if (tasks.length > 0) await Promise.all(tasks);
+        }
+
+        // Extract the raw ID from a Lookup field value. COQL may return Lookups
+        // as either a plain string ID, an object with .id, or null.
+        function lookupRawId(val) {
+            if (!val) return null;
+            if (typeof val === 'string') return val;
+            if (typeof val === 'object' && val.id) return val.id;
+            return null;
         }
 
         async function searchReferrals() {
@@ -320,8 +407,8 @@
                 'payer_name': document.getElementById('payer_name').value,
                 'adjuster_name': document.getElementById('adjuster_name').value
             };
+            log('Search criteria: ' + JSON.stringify(criteria));
 
-            // Validate at least one search term is present.
             const anyValue = Object.values(criteria).some(v => v && v.trim());
             if (!anyValue) {
                 showError('Please enter at least one search term.');
@@ -329,18 +416,24 @@
             }
 
             try {
-                // --- Step 1: resolve Lookup display names to IDs (Section 6.2) ---
+                // --- Step 1: resolve Lookup display names to IDs ---
                 const [payerResult, adjusterResult] = await Promise.all([
                     resolvePayerIds(criteria['payer_name']),
                     resolveAdjusterIds(criteria['adjuster_name'])
                 ]);
+                log('Payer resolution: hadTerm=' + payerResult.hadTerm +
+                    ', idCount=' + (payerResult.ids ? payerResult.ids.length : 0));
+                log('Adjuster resolution: hadTerm=' + adjusterResult.hadTerm +
+                    ', idCount=' + (adjusterResult.ids ? adjusterResult.ids.length : 0));
 
                 // Section 6.3: short-circuit with specific error if a Lookup search returned zero matches.
-                if (payerResult.hadTerm && payerResult.ids.length === 0) {
+                // v1.1: defensive — explicit array check before .length to handle any edge case
+                // where ids comes back undefined.
+                if (payerResult.hadTerm && (!payerResult.ids || payerResult.ids.length === 0)) {
                     showError("No payers match '" + criteria['payer_name'] + "'.");
                     return;
                 }
-                if (adjusterResult.hadTerm && adjusterResult.ids.length === 0) {
+                if (adjusterResult.hadTerm && (!adjusterResult.ids || adjusterResult.ids.length === 0)) {
                     showError("No adjusters match '" + criteria['adjuster_name'] + "'.");
                     return;
                 }
@@ -369,9 +462,11 @@
                 log('Step 2 query (Deals): ' + selectQuery);
 
                 const data = await ZOHO.CRM.API.coql({ select_query: selectQuery });
-                log('Step 2 response: ' + JSON.stringify(data).slice(0, 500));
+                log('Step 2 returned ' + (data.data ? data.data.length : 0) + ' Deal(s)');
 
                 if (data.data && data.data.length > 0) {
+                    // v1.1: backfill any Lookup display names not already in the map.
+                    await backfillLookupNames(data.data);
                     displayResults(data.data);
                 } else {
                     showError('No referrals found matching your criteria.');
@@ -382,12 +477,17 @@
             }
         }
 
-        // Helper: extract display name from a Lookup field that may be returned
-        // as either {name, id} object, a plain string, or null/undefined.
-        function lookupName(val) {
+        // Helper: extract display name from a Lookup field for rendering.
+        // v1.1: prefers the resolved client-side map (populated from step-1 and
+        // backfill queries); falls back to whatever shape COQL returned.
+        function lookupName(val, nameMap) {
             if (!val) return '';
+            const id = lookupRawId(val);
+            if (id && nameMap && nameMap.has(id)) return nameMap.get(id);
+            // Fallbacks for unexpected shapes.
             if (typeof val === 'object' && val.name) return val.name;
-            return String(val);
+            if (typeof val === 'string') return val; // raw ID; better than [object Object]
+            return '';
         }
 
         function escapeHtml(str) {
@@ -415,8 +515,8 @@
                 let dob = record.Claimant_DOB || '-';
                 let status = record.Referral_Status || 'Active';
                 let recordId = record.id;
-                let payerName = lookupName(record.Account_Name) || '(none)';
-                let adjusterName = lookupName(record.Contact_Name) || '(none)';
+                let payerName = lookupName(record.Account_Name, accountNameById) || '(none)';
+                let adjusterName = lookupName(record.Contact_Name, contactNameById) || '(none)';
 
                 // Section 12.2: hardcoded status colors don't match real picklist
                 // values; retained from baseline for v1.0.
