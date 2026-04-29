@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagnoliaMap v3.20 - Find Nearby Providers</title>
+    <title>MagnoliaMap v3.22 - Find Nearby Providers</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCWYDQ2ruxrrYSKZpwVUkI2uhSRjgb-6uU&libraries=geometry"></script>
@@ -25,10 +25,26 @@
         button { padding: 9px 12px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 6px; }
         .plot-btn { background:#4CAF50; color:white; }
         .clear-btn { background:#f44336; color:white; }
-        .info-window h4 { margin: 0 0 6px 0; font-size: 14px; }
-        .info-window .services { font-size: 12px; color: #555; }
-        .info-window .meta { font-size: 12px; color: #888; margin-top: 4px; }
-        .info-window .status { font-size: 11px; color: #aaa; margin-top: 2px; }
+
+        /* Slider with preset tick marks */
+        #radiusSlider { width: 100%; margin: 8px 0 4px 0; }
+        .slider-ticks { display: flex; justify-content: space-between; font-size: 11px; color: #666; padding: 0 2px; }
+        .slider-ticks span { cursor: pointer; padding: 2px 4px; border-radius: 3px; }
+        .slider-ticks span:hover { background: #e0e0e0; }
+        .slider-ticks span.active { font-weight: bold; color: #1976d2; background: #e3f2fd; }
+
+        /* Provider info window styling per spec 7.5 */
+        .iw { max-width: 280px; font-family: Arial, sans-serif; }
+        .iw h4 { margin: 0 0 8px 0; font-size: 14px; color: #222; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+        .iw-row { font-size: 12px; margin: 3px 0; color: #444; }
+        .iw-row .label { color: #888; display: inline-block; min-width: 90px; }
+        .iw-row .val { color: #333; }
+        .iw-row .placeholder { color: #bbb; font-style: italic; }
+        .iw-services { font-size: 12px; margin: 6px 0; padding: 4px 0; border-top: 1px solid #eee; }
+        .iw-services .label { color: #888; display: block; margin-bottom: 3px; }
+        .iw-note { font-size: 12px; font-style: italic; color: #555; margin-top: 8px; padding-top: 6px; border-top: 1px solid #eee; white-space: pre-wrap; }
+        .iw-distance { font-size: 11px; color: #888; margin-top: 6px; padding-top: 4px; border-top: 1px solid #eee; }
+
         #searchCenterStatus { font-size: 12px; color: #555; font-style: italic; margin-top: 6px; }
         #statusBanner {
             font-size: 12px; padding: 8px; border-radius: 4px; margin-top: 8px;
@@ -43,32 +59,38 @@
     <div id="map"></div>
 
     <script>
-        // === MagnoliaMap v3.20 ===
-        // Fixes vs v3.19:
-        //   1. CRITICAL: Geocoder promise no longer hangs forever on non-OK status.
-        //      Previously, if claimant address geocoding failed, the await blocked
-        //      indefinitely and loadProviders() was never called.
-        //   2. Provider loading now decoupled from claimant geocoding success.
-        //      If the claimant address is empty or fails to geocode, the widget
-        //      still loads providers and lets the user enter a manual address.
-        //   3. Visible status banner replaces the silent loading overlay so failure
-        //      modes are immediately apparent.
-        //   4. Full referral record now logged to console so the address-field
-        //      mapping can be verified (the assumed fields are
-        //      Street_Address_1 / City / State / Zip on the Deal — these may not
-        //      match this particular referral's schema).
+        // === MagnoliaMap v3.22 ===
+        // Implements spec from MagnoliaMap-CHECKLIST.md (verified 2026-04-29).
+        //
+        // Spec changes vs v3.21:
+        //   - Section 7.1: Radius slider snaps to {20, 30, 50, 100}, default 20.
+        //                  Map zoom does NOT change when radius changes.
+        //   - Section 7.2: All filtering on Provider_Contract_Status removed.
+        //   - Section 7.3: Metairie LA fallback when claimant address unavailable.
+        //                  No providers plotted when search center is the fallback.
+        //   - Section 7.4: Hover tooltip shows only the Name (Provider_Location_Name).
+        //   - Section 7.5: Click info window shows expanded provider details with
+        //                  null placeholders, conditional Max_PT_Visit_Rate, and
+        //                  italicized Provider_Map_Note.
 
-        const PROVIDERS_MODULE_API_NAME = "Providers";
-        const DEFAULT_MAP_CENTER = { lat: 27.8, lng: -81.7 }; // Florida fallback
+        const PROVIDERS_MODULE_API_NAME = "Providers"; // Spec 3
+        const RADIUS_PRESETS = [20, 30, 50, 100];      // Spec 7.1
+        const DEFAULT_RADIUS = 20;                      // Spec 7.1
+        const METAIRIE_LA = { lat: 29.9841, lng: -90.1529 }; // Spec 7.3 fallback
+        const METAIRIE_ZOOM = 11;                       // Spec 7.6
+        const CLAIMANT_ZOOM = 11;                       // Spec 7.6
+        const ALT_ZOOM = 12;                            // Spec 7.6
 
         let map, patientMarker, altMarker = null, providerMarkers = [], infoWindow;
         let currentReferral = {};
         let patientLocation = null;
         let searchCenter = null;
-        let currentRadius = 25;
+        let usingFallbackCenter = false; // True when map is centered on Metairie with no real claimant
+        let currentRadius = DEFAULT_RADIUS;
         let activeServiceTypes = new Set();
         let allProviders = [];
 
+        // Spec Section 5: service type → marker color (case-sensitive)
         const SERVICE_COLORS = {
             'Diagnostic Imaging': '#FFD700',
             'DME': '#FF0000',
@@ -79,8 +101,17 @@
             'PT Direct': '#9932CC'
         };
 
-        function log(msg) { console.log('[MagnoliaMap v3.20]', msg); }
+        function log(msg) { console.log('[MagnoliaMap v3.22]', msg); }
 
+        // Quirk 11.2: safe DOM helpers — Google Maps mounts controls async.
+        function safeSetText(id, text) {
+            const el = document.getElementById(id);
+            if (el) el.innerText = text;
+        }
+        function safeSetHtml(id, html) {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = html;
+        }
         function setStatus(msg, level) {
             log('STATUS: ' + msg);
             const el = document.getElementById('statusBanner');
@@ -100,9 +131,7 @@
                 const resp = await ZOHO.CRM.API.getRecord({ Entity: "Deals", RecordID: recordId });
                 if (resp.data && resp.data[0]) {
                     currentReferral = resp.data[0];
-                    log('=== FULL REFERRAL RECORD (verify field names below) ===');
-                    log(JSON.stringify(currentReferral, null, 2));
-                    log('=== Available field keys: ' + Object.keys(currentReferral).join(', '));
+                    log('Referral loaded: ' + (currentReferral.Deal_Name || recordId));
                     initMap();
                 }
             } catch (e) {
@@ -111,15 +140,13 @@
         }
 
         function initMap() {
+            // Default center: Metairie until claimant geocodes successfully (Spec 7.3).
             map = new google.maps.Map(document.getElementById('map'), {
-                center: DEFAULT_MAP_CENTER, zoom: 7,
+                center: METAIRIE_LA, zoom: METAIRIE_ZOOM,
                 mapTypeControl: false, streetViewControl: false
             });
             infoWindow = new google.maps.InfoWindow();
             map.controls[google.maps.ControlPosition.LEFT_TOP].push(createControlsPanel());
-
-            // Kick off claimant location and provider load independently — neither
-            // blocks the other.
             plotPatientLocation();
         }
 
@@ -127,6 +154,7 @@
             const panel = document.createElement('div');
             panel.id = 'controls';
 
+            // Spec Section 5: filter checkboxes inlined to avoid race condition (Quirk 11.5).
             const filterRows = Object.keys(SERVICE_COLORS).map(type => `
                 <div class="checkbox-item">
                     <input type="checkbox" id="filter_${cssId(type)}" onchange="toggleServiceType('${type}', this.checked)">
@@ -135,10 +163,17 @@
                 </div>
             `).join('');
 
+            // Spec 7.1: radius slider with preset tick marks (snap-to behavior).
+            const tickMarks = RADIUS_PRESETS.map(r =>
+                `<span data-radius="${r}" onclick="setRadius(${r})" class="${r === currentRadius ? 'active' : ''}" id="tick_${r}">${r}</span>`
+            ).join('');
+
             panel.innerHTML = `
                 <div class="control-section">
                     <h4>Search Radius: <span id="radVal">${currentRadius}</span> mi</h4>
-                    <input type="range" min="5" max="100" value="${currentRadius}" style="width:100%;" oninput="updateRadius(this.value)">
+                    <input type="range" id="radiusSlider" min="20" max="100" value="${currentRadius}" step="1"
+                        oninput="onSliderInput(this.value)" onchange="onSliderRelease(this.value)">
+                    <div class="slider-ticks">${tickMarks}</div>
                 </div>
                 <div class="control-section">
                     <h4>Filter by Service Type</h4>
@@ -149,7 +184,7 @@
                     <input type="text" id="altAddress" placeholder="Work, school, family home, etc.">
                     <button class="plot-btn" onclick="plotAlternativeAddress()">Plot Alternative Address</button>
                     <button class="clear-btn" onclick="clearAlternativeAddress()">Clear Alternative Marker</button>
-                    <div id="searchCenterStatus">Searching around: (waiting for claimant geocode)</div>
+                    <div id="searchCenterStatus">Searching around: (loading...)</div>
                 </div>
                 <div id="providerCount" style="font-size:13px; padding-top:6px;">Loading providers...</div>
                 <div id="statusBanner">Initializing...</div>
@@ -159,38 +194,70 @@
 
         function cssId(s) { return s.replace(/[^a-zA-Z0-9]/g, '_'); }
 
-        window.updateRadius = function(val) {
-            currentRadius = parseInt(val);
-            document.getElementById('radVal').innerText = val;
-            if (searchCenter) filterAndPlotProviders();
+        // Spec 7.1: snap to nearest preset.
+        function snapToPreset(value) {
+            const v = parseInt(value, 10);
+            return RADIUS_PRESETS.reduce((closest, preset) =>
+                Math.abs(preset - v) < Math.abs(closest - v) ? preset : closest
+            );
+        }
+
+        // Live drag — show the value the slider WILL snap to, but don't refilter yet.
+        window.onSliderInput = function(val) {
+            const snapped = snapToPreset(val);
+            safeSetText('radVal', snapped);
+            updateActiveTick(snapped);
         };
+
+        // Release — commit the snap and refilter.
+        window.onSliderRelease = function(val) {
+            const snapped = snapToPreset(val);
+            const slider = document.getElementById('radiusSlider');
+            if (slider) slider.value = snapped;
+            setRadius(snapped);
+        };
+
+        // Direct preset click (tick mark).
+        window.setRadius = function(val) {
+            currentRadius = parseInt(val, 10);
+            safeSetText('radVal', currentRadius);
+            const slider = document.getElementById('radiusSlider');
+            if (slider) slider.value = currentRadius;
+            updateActiveTick(currentRadius);
+            // Spec 7.1: map zoom does NOT change.
+            if (searchCenter && !usingFallbackCenter) filterAndPlotProviders();
+        };
+
+        function updateActiveTick(activeVal) {
+            RADIUS_PRESETS.forEach(r => {
+                const el = document.getElementById('tick_' + r);
+                if (el) el.classList.toggle('active', r === activeVal);
+            });
+        }
 
         window.toggleServiceType = function(type, checked) {
             if (checked) activeServiceTypes.add(type); else activeServiceTypes.delete(type);
-            if (searchCenter) filterAndPlotProviders();
+            if (searchCenter && !usingFallbackCenter) filterAndPlotProviders();
         };
 
-        // --- FIX #1: A geocoder wrapper that ACTUALLY rejects on failure
-        //    instead of silently hanging.
+        // Quirk 11.1: geocoder must explicitly reject on failure.
         function geocodeAddress(address) {
             return new Promise((resolve, reject) => {
                 if (!address) return reject(new Error('Empty address string'));
                 new google.maps.Geocoder().geocode({ address }, (res, status) => {
-                    if (status === "OK" && res && res[0]) {
-                        resolve(res[0]);
-                    } else {
-                        reject(new Error(`Geocode failed (status=${status}) for: "${address}"`));
-                    }
+                    if (status === "OK" && res && res[0]) resolve(res[0]);
+                    else reject(new Error(`Geocode failed (status=${status}) for: "${address}"`));
                 });
             });
         }
 
+        // Spec 4.1: claimant address fields on the Deals module.
         function buildClaimantAddress(referral) {
             return [
-                referral.Street_Address_1,
-                referral.Provider_Address_City || referral.City,
-                referral.Provider_Address_State || referral.State,
-                referral.Provider_Address_Zip || referral.Zip
+                referral.Claimant_St_Address || referral.Claimant_St_Address_1,
+                referral.Claimant_City,
+                referral.Claimant_State,
+                referral.Claimant_Zip
             ].filter(Boolean).join(', ');
         }
 
@@ -198,16 +265,17 @@
             const address = buildClaimantAddress(currentReferral);
             log('Constructed claimant address: "' + address + '"');
 
-            // --- FIX #2: Always proceed to load providers, even if geocoding fails.
-            //    Run claimant geocoding and provider load concurrently so a slow
-            //    or failing geocode doesn't block the COQL query.
             const providersPromise = loadProviders();
 
             if (!address) {
-                setStatus('No claimant address found on this referral. Use "Plot Alternative Address" to set a search center.', 'warn');
-                document.getElementById('searchCenterStatus').innerText =
-                    'Searching around: (none — enter alt address)';
+                // Spec 7.3: no claimant → Metairie fallback, no providers plotted.
+                usingFallbackCenter = true;
+                searchCenter = null;
+                setStatus('No claimant address on this referral. Use "Plot Alternative Address" to set a search center.', 'warn');
+                safeSetText('searchCenterStatus', 'Searching around: (none — enter alt address)');
                 await providersPromise;
+                safeSetText('providerCount',
+                    `${allProviders.length} loaded — enter an address to plot nearby providers`);
                 return;
             }
 
@@ -215,8 +283,9 @@
                 const result = await geocodeAddress(address);
                 patientLocation = result.geometry.location;
                 searchCenter = patientLocation;
+                usingFallbackCenter = false;
                 map.setCenter(patientLocation);
-                map.setZoom(11);
+                map.setZoom(CLAIMANT_ZOOM);
 
                 patientMarker = new google.maps.Marker({
                     position: patientLocation, map: map, title: "Claimant Home",
@@ -224,26 +293,35 @@
                     zIndex: 999
                 });
 
-                document.getElementById('searchCenterStatus').innerText = 'Searching around: Claimant Home';
+                safeSetText('searchCenterStatus', 'Searching around: Claimant Home');
                 setStatus(`Claimant geocoded: ${patientLocation.lat().toFixed(4)}, ${patientLocation.lng().toFixed(4)}`);
             } catch (err) {
+                // Spec 7.3: geocode failed → Metairie fallback, no providers plotted.
                 log('Geocoding error: ' + err.message);
+                usingFallbackCenter = true;
+                searchCenter = null;
                 setStatus(`Could not geocode claimant address. ${err.message}. Use "Plot Alternative Address".`, 'error');
-                document.getElementById('searchCenterStatus').innerText =
-                    'Searching around: (geocode failed — enter alt address)';
+                safeSetText('searchCenterStatus', 'Searching around: (geocode failed — enter alt address)');
             }
 
-            // Once providers are loaded, plot whatever we can.
             await providersPromise;
-            if (searchCenter) filterAndPlotProviders();
+            if (searchCenter && !usingFallbackCenter) filterAndPlotProviders();
+            else safeSetText('providerCount',
+                `${allProviders.length} loaded — enter an address to plot nearby providers`);
         }
 
         async function loadProviders() {
             log(`Running COQL query on ${PROVIDERS_MODULE_API_NAME}...`);
             try {
+                // Spec 4.2 + 7.2 + 7.5: select only fields the widget actually uses.
+                // Provider_Contract_Status NOT included (Spec 7.2: no status filtering).
                 const query =
-                    `select Name, Provider_Contract_Status, Location_Services_Offered, ` +
-                    `Provider_Latitude, Provider_Longitude ` +
+                    `select Name, Location_Services_Offered, ` +
+                    `Provider_Latitude, Provider_Longitude, ` +
+                    `Provider_Address_Street_1, Provider_Address_Street_2, ` +
+                    `Provider_Address_City, Provider_Address_State, Provider_Address_Zip, ` +
+                    `Provider_Phone, Provider_Fax, Provider_Contract_Type, ` +
+                    `Max_PT_Visit_Rate, Provider_Map_Note ` +
                     `from ${PROVIDERS_MODULE_API_NAME} ` +
                     `where Provider_Latitude is not null and Provider_Longitude is not null limit 200`;
                 const resp = await ZOHO.CRM.API.coql({ select_query: query });
@@ -252,17 +330,17 @@
                 if (allProviders.length > 0) {
                     log('First provider keys: ' + Object.keys(allProviders[0]).join(', '));
                 }
-                document.getElementById('providerCount').innerText =
-                    `${allProviders.length} provider${allProviders.length !== 1 ? 's' : ''} loaded from Zoho`;
+                safeSetText('providerCount',
+                    `${allProviders.length} provider${allProviders.length !== 1 ? 's' : ''} loaded from Zoho`);
             } catch (err) {
                 log('COQL ERROR: ' + JSON.stringify(err));
                 setStatus(`COQL error: ${JSON.stringify(err).slice(0, 200)}`, 'error');
-                document.getElementById('providerCount').innerText = 'COQL error — see console';
+                safeSetText('providerCount', 'COQL error — see console');
             }
         }
 
         function getServiceTypes(p) {
-            let v = p.Location_Services_Offered || p.Provider_Service_Type;
+            let v = p.Location_Services_Offered;
             if (!v) return [];
             if (Array.isArray(v)) return v;
             return String(v).split(';').map(s => s.trim()).filter(Boolean);
@@ -288,8 +366,73 @@
             };
         }
 
+        // Spec 7.5: info window field rendering.
+        // For Max_PT_Visit_Rate: omit row entirely if null.
+        // For all others: show label, with placeholder if value is null.
+        function renderInfoWindow(p, distMiles) {
+            const placeholder = '<span class="placeholder">(not provided)</span>';
+
+            const v = (val) => (val !== null && val !== undefined && val !== '')
+                ? `<span class="val">${escapeHtml(String(val))}</span>`
+                : placeholder;
+
+            // City/State/Zip combined into one line.
+            const cityStateZip = [p.Provider_Address_City, p.Provider_Address_State, p.Provider_Address_Zip]
+                .filter(Boolean).join(', ');
+            const cityStateZipDisplay = cityStateZip
+                ? `<span class="val">${escapeHtml(cityStateZip)}</span>`
+                : placeholder;
+
+            // Services list with color dots.
+            const types = getServiceTypes(p);
+            const servicesHtml = types.length
+                ? types.map(t => {
+                    const c = SERVICE_COLORS[t] || SERVICE_COLORS['Other'];
+                    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:4px;border:1px solid #666;vertical-align:middle;"></span>${escapeHtml(t)}`;
+                }).join('<br>')
+                : placeholder;
+
+            // Max_PT_Visit_Rate: conditional on non-null.
+            const rateVal = p.Max_PT_Visit_Rate;
+            const rateRow = (rateVal !== null && rateVal !== undefined && rateVal !== '')
+                ? `<div class="iw-row"><span class="label">Max PT Rate:</span> <span class="val">$${escapeHtml(String(rateVal))}</span></div>`
+                : '';
+
+            // Provider_Map_Note: italicized, only render section if populated.
+            const noteVal = p.Provider_Map_Note;
+            const noteHtml = (noteVal !== null && noteVal !== undefined && noteVal !== '')
+                ? `<div class="iw-note">${escapeHtml(String(noteVal))}</div>`
+                : '';
+
+            return `
+                <div class="iw">
+                    <h4>${escapeHtml(p.Name || 'Provider')}</h4>
+                    <div class="iw-row"><span class="label">Street 1:</span> ${v(p.Provider_Address_Street_1)}</div>
+                    <div class="iw-row"><span class="label">Street 2:</span> ${v(p.Provider_Address_Street_2)}</div>
+                    <div class="iw-row"><span class="label">City/State/ZIP:</span> ${cityStateZipDisplay}</div>
+                    <div class="iw-row"><span class="label">Phone:</span> ${v(p.Provider_Phone)}</div>
+                    <div class="iw-row"><span class="label">Fax:</span> ${v(p.Provider_Fax)}</div>
+                    <div class="iw-row"><span class="label">Contract Type:</span> ${v(p.Provider_Contract_Type)}</div>
+                    ${rateRow}
+                    <div class="iw-services">
+                        <span class="label">Services Offered:</span>
+                        ${servicesHtml}
+                    </div>
+                    ${noteHtml}
+                    <div class="iw-distance">${distMiles.toFixed(1)} mi from search center</div>
+                </div>
+            `;
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
         window.plotAlternativeAddress = async function() {
-            const addr = document.getElementById('altAddress').value.trim();
+            const addrEl = document.getElementById('altAddress');
+            const addr = addrEl ? addrEl.value.trim() : '';
             if (!addr) return alert("Enter an address");
             try {
                 const result = await geocodeAddress(addr);
@@ -300,11 +443,11 @@
                     zIndex: 998
                 });
                 map.setCenter(result.geometry.location);
-                map.setZoom(12);
+                map.setZoom(ALT_ZOOM);
 
                 searchCenter = result.geometry.location;
-                document.getElementById('searchCenterStatus').innerText =
-                    'Searching around: Alternative Address';
+                usingFallbackCenter = false;
+                safeSetText('searchCenterStatus', 'Searching around: Alternative Address');
                 setStatus(`Alt address geocoded: ${result.geometry.location.lat().toFixed(4)}, ${result.geometry.location.lng().toFixed(4)}`);
                 filterAndPlotProviders();
             } catch (e) {
@@ -315,41 +458,49 @@
         window.clearAlternativeAddress = function() {
             if (altMarker) altMarker.setMap(null);
             altMarker = null;
-            document.getElementById('altAddress').value = '';
+            const addrEl = document.getElementById('altAddress');
+            if (addrEl) addrEl.value = '';
+
+            // Spec 7.3: revert to claimant home if available, else fallback state.
             if (patientLocation) {
                 searchCenter = patientLocation;
+                usingFallbackCenter = false;
                 map.setCenter(patientLocation);
-                document.getElementById('searchCenterStatus').innerText =
-                    'Searching around: Claimant Home';
+                map.setZoom(CLAIMANT_ZOOM);
+                safeSetText('searchCenterStatus', 'Searching around: Claimant Home');
                 filterAndPlotProviders();
             } else {
                 searchCenter = null;
-                document.getElementById('searchCenterStatus').innerText =
-                    'Searching around: (none)';
+                usingFallbackCenter = true;
+                map.setCenter(METAIRIE_LA);
+                map.setZoom(METAIRIE_ZOOM);
+                safeSetText('searchCenterStatus', 'Searching around: (none)');
                 providerMarkers.forEach(m => m.setMap(null));
                 providerMarkers = [];
-                document.getElementById('providerCount').innerText =
-                    `${allProviders.length} loaded — enter an address to plot nearby providers`;
+                safeSetText('providerCount',
+                    `${allProviders.length} loaded — enter an address to plot nearby providers`);
             }
         };
 
         function filterAndPlotProviders() {
             providerMarkers.forEach(m => m.setMap(null));
             providerMarkers = [];
-            if (!searchCenter) return;
+
+            // Spec 7.3: don't plot when in fallback state.
+            if (!searchCenter || usingFallbackCenter) return;
 
             let count = 0;
 
             allProviders.forEach(p => {
-                // === INACTIVE-STATUS GUARD (DISABLED) ===
-                // Reinstate once Provider_Contract_Status values are curated:
-                // if ((p.Provider_Contract_Status || '').toLowerCase().includes('inactive')) return;
+                // Spec 7.2: only filters are coordinate validity, distance, and service type.
+                // No Provider_Contract_Status filtering.
 
                 const types = getServiceTypes(p);
                 if (activeServiceTypes.size > 0 && !types.some(t => activeServiceTypes.has(t))) return;
 
                 const lat = parseFloat(p.Provider_Latitude);
                 const lng = parseFloat(p.Provider_Longitude);
+                // Quirk 11.6: reject zero coordinates as well as NaN.
                 if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return;
 
                 const pos = new google.maps.LatLng(lat, lng);
@@ -358,27 +509,17 @@
                 if (distMiles > currentRadius) return;
 
                 const color = getProviderColor(types);
+
+                // Spec 7.4: hover tooltip shows only the Name.
                 const marker = new google.maps.Marker({
                     position: pos, map: map,
-                    title: p.Name || 'Provider', icon: buildProviderIcon(color)
+                    title: p.Name || 'Provider',
+                    icon: buildProviderIcon(color)
                 });
 
-                const servicesHtml = types.length
-                    ? types.map(t => {
-                        const c = SERVICE_COLORS[t] || SERVICE_COLORS['Other'];
-                        return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:4px;border:1px solid #666;"></span>${t}`;
-                    }).join('<br>')
-                    : '<em>No services listed</em>';
-
+                // Spec 7.5: click opens detailed info window.
                 marker.addListener('click', () => {
-                    infoWindow.setContent(`
-                        <div class="info-window">
-                            <h4>${p.Name || 'Provider'}</h4>
-                            <div class="services">${servicesHtml}</div>
-                            <div class="meta">${distMiles.toFixed(1)} mi from search center</div>
-                            <div class="status">Status: ${p.Provider_Contract_Status || '(none)'}</div>
-                        </div>
-                    `);
+                    infoWindow.setContent(renderInfoWindow(p, distMiles));
                     infoWindow.open(map, marker);
                 });
 
@@ -386,9 +527,9 @@
                 count++;
             });
 
-            document.getElementById('providerCount').innerHTML =
-                `<strong>${count}</strong> provider${count !== 1 ? 's' : ''} shown within ${currentRadius} miles`;
-            log(`Plotted ${count} providers around search center`);
+            safeSetHtml('providerCount',
+                `<strong>${count}</strong> provider${count !== 1 ? 's' : ''} shown within ${currentRadius} miles`);
+            log(`Plotted ${count} providers around search center (radius=${currentRadius}mi)`);
         }
     </script>
 </body>
