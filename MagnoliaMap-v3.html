@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagnoliaMap v3.22 - Find Nearby Providers</title>
+    <title>MagnoliaMap v3.23 - Find Nearby Providers</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCWYDQ2ruxrrYSKZpwVUkI2uhSRjgb-6uU&libraries=geometry"></script>
@@ -59,10 +59,21 @@
     <div id="map"></div>
 
     <script>
-        // === MagnoliaMap v3.22 ===
+        // === MagnoliaMap v3.23 ===
         // Implements spec from MagnoliaMap-CHECKLIST.md (verified 2026-04-29).
         //
-        // Spec changes vs v3.21:
+        // Changes vs v3.22:
+        //   - COQL PAGINATION (critical fix): Zoho's COQL caps responses at 200
+        //     records per call. With ~3,000 providers in the database and an
+        //     alphabetical default sort, the un-paginated query was fetching only
+        //     A-through-early-B providers and never seeing Texas, Louisiana,
+        //     Florida, or anything farther down the alphabet. The widget now
+        //     paginates through all records in 200-record batches using `offset`,
+        //     stopping when a batch returns fewer than 200 (last page).
+        //   - Pipeline diagnostic logging (carried forward from v3.22 instrumented
+        //     update) shows where records drop out of the filter chain.
+        //
+        // Spec from v3.22 (unchanged):
         //   - Section 7.1: Radius slider snaps to {20, 30, 50, 100}, default 20.
         //                  Map zoom does NOT change when radius changes.
         //   - Section 7.2: All filtering on Provider_Contract_Status removed.
@@ -101,7 +112,7 @@
             'PT Direct': '#9932CC'
         };
 
-        function log(msg) { console.log('[MagnoliaMap v3.22]', msg); }
+        function log(msg) { console.log('[MagnoliaMap v3.23]', msg); }
 
         // Quirk 11.2: safe DOM helpers — Google Maps mounts controls async.
         function safeSetText(id, text) {
@@ -311,11 +322,16 @@
         }
 
         async function loadProviders() {
-            log(`Running COQL query on ${PROVIDERS_MODULE_API_NAME}...`);
+            log(`Running paginated COQL query on ${PROVIDERS_MODULE_API_NAME}...`);
             try {
                 // Spec 4.2 + 7.2 + 7.5: select only fields the widget actually uses.
                 // Provider_Contract_Status NOT included (Spec 7.2: no status filtering).
-                const query =
+                //
+                // COQL hard limit: 200 records per response. With ~3,000 providers
+                // in the database, we MUST paginate via `offset` to fetch them all.
+                const PAGE_SIZE = 200;
+                const MAX_PAGES = 50; // Safety cap: 50 * 200 = 10,000 records
+                const baseQuery =
                     `select Name, Location_Services_Offered, ` +
                     `Provider_Latitude, Provider_Longitude, ` +
                     `Provider_Address_Street_1, Provider_Address_Street_2, ` +
@@ -323,10 +339,34 @@
                     `Provider_Phone, Provider_Fax, Provider_Contract_Type, ` +
                     `Max_PT_Visit_Rate, Provider_Map_Note ` +
                     `from ${PROVIDERS_MODULE_API_NAME} ` +
-                    `where Provider_Latitude is not null and Provider_Longitude is not null limit 200`;
-                const resp = await ZOHO.CRM.API.coql({ select_query: query });
-                allProviders = resp.data || [];
-                log('COQL returned ' + allProviders.length + ' providers');
+                    `where Provider_Latitude is not null and Provider_Longitude is not null`;
+
+                allProviders = [];
+                let page = 0;
+                let lastBatchSize = PAGE_SIZE;
+
+                // Update the count display as pages stream in so the user sees progress.
+                while (lastBatchSize === PAGE_SIZE && page < MAX_PAGES) {
+                    const offset = page * PAGE_SIZE;
+                    const pagedQuery = `${baseQuery} limit ${PAGE_SIZE} offset ${offset}`;
+                    log(`Fetching page ${page + 1} (offset=${offset})...`);
+
+                    const resp = await ZOHO.CRM.API.coql({ select_query: pagedQuery });
+                    const batch = resp.data || [];
+                    lastBatchSize = batch.length;
+                    allProviders = allProviders.concat(batch);
+
+                    safeSetText('providerCount',
+                        `Loading providers... (${allProviders.length} so far)`);
+
+                    page++;
+                }
+
+                if (page >= MAX_PAGES) {
+                    log(`WARNING: Hit MAX_PAGES safety cap at ${MAX_PAGES} pages. Some providers may not be loaded.`);
+                }
+
+                log(`Pagination complete: ${allProviders.length} total providers loaded across ${page} page(s)`);
                 if (allProviders.length > 0) {
                     log('First provider keys: ' + Object.keys(allProviders[0]).join(', '));
                 }
@@ -489,24 +529,49 @@
             // Spec 7.3: don't plot when in fallback state.
             if (!searchCenter || usingFallbackCenter) return;
 
-            let count = 0;
+            // Stage counters so we can see exactly where records drop out.
+            // Especially useful for diagnosing "zero providers" when lat/lng data
+            // is malformed (Quirk 11.6 + variants).
+            const stages = { total: allProviders.length, afterServiceFilter: 0,
+                             withValidCoords: 0, withinRadius: 0, plotted: 0 };
+            const sampleRejections = { coords: [], distance: [] };
 
             allProviders.forEach(p => {
                 // Spec 7.2: only filters are coordinate validity, distance, and service type.
-                // No Provider_Contract_Status filtering.
 
                 const types = getServiceTypes(p);
                 if (activeServiceTypes.size > 0 && !types.some(t => activeServiceTypes.has(t))) return;
+                stages.afterServiceFilter++;
 
                 const lat = parseFloat(p.Provider_Latitude);
                 const lng = parseFloat(p.Provider_Longitude);
                 // Quirk 11.6: reject zero coordinates as well as NaN.
-                if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return;
+                if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) {
+                    if (sampleRejections.coords.length < 3) {
+                        sampleRejections.coords.push({
+                            name: p.Name,
+                            rawLat: p.Provider_Latitude,
+                            rawLng: p.Provider_Longitude,
+                            parsedLat: lat, parsedLng: lng
+                        });
+                    }
+                    return;
+                }
+                stages.withValidCoords++;
 
                 const pos = new google.maps.LatLng(lat, lng);
                 const distMiles =
                     google.maps.geometry.spherical.computeDistanceBetween(searchCenter, pos) / 1609.34;
-                if (distMiles > currentRadius) return;
+                if (distMiles > currentRadius) {
+                    if (sampleRejections.distance.length < 3) {
+                        sampleRejections.distance.push({
+                            name: p.Name, distMiles: distMiles.toFixed(1),
+                            lat, lng
+                        });
+                    }
+                    return;
+                }
+                stages.withinRadius++;
 
                 const color = getProviderColor(types);
 
@@ -524,12 +589,21 @@
                 });
 
                 providerMarkers.push(marker);
-                count++;
+                stages.plotted++;
             });
 
             safeSetHtml('providerCount',
-                `<strong>${count}</strong> provider${count !== 1 ? 's' : ''} shown within ${currentRadius} miles`);
-            log(`Plotted ${count} providers around search center (radius=${currentRadius}mi)`);
+                `<strong>${stages.plotted}</strong> provider${stages.plotted !== 1 ? 's' : ''} shown within ${currentRadius} miles`);
+
+            // Diagnostic pipeline log — shows where records drop out.
+            log(`Pipeline: total=${stages.total} → afterServiceFilter=${stages.afterServiceFilter} → withValidCoords=${stages.withValidCoords} → withinRadius=${stages.withinRadius} → PLOTTED=${stages.plotted} (radius=${currentRadius}mi)`);
+
+            if (sampleRejections.coords.length > 0) {
+                log('Sample records rejected for invalid coords (showing up to 3): ' + JSON.stringify(sampleRejections.coords, null, 2));
+            }
+            if (sampleRejections.distance.length > 0 && stages.plotted === 0) {
+                log('Sample records rejected for distance > radius (showing up to 3): ' + JSON.stringify(sampleRejections.distance, null, 2));
+            }
         }
     </script>
 </body>
