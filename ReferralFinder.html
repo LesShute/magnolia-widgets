@@ -120,19 +120,32 @@
             border-bottom: 1px solid #e2e8f0;
             color: #2d3748;
         }
-        tr:last-child td {
-            border-bottom: none;
+        /* Style 2 secondary row - spans full width below the primary row */
+        tr.primary-row td { border-bottom: none; }
+        tr.secondary-row td {
+            padding: 6px 16px 14px 16px;
+            font-size: 13px;
+            color: #718096;
+            background: #fafbfc;
         }
-        tr:hover td {
-            background: #ebf8ff;
+        tr.secondary-row td .label {
+            color: #a0aec0;
+            font-weight: 600;
+            margin-right: 4px;
         }
+        tr.secondary-row td .sep {
+            color: #cbd5e0;
+            margin: 0 10px;
+        }
+        tr:hover td { background: #ebf8ff; }
+        tr.secondary-row:hover td { background: #e6f3fa; }
         .status-badge {
             padding: 4px 10px;
             border-radius: 20px;
             font-size: 12px;
             font-weight: 600;
         }
-.status-active {
+        .status-active {
             background: #c6f6d5;
             color: #22543d;
         }
@@ -216,8 +229,30 @@
     </div>
 
     <script>
+        // === ReferralFinder v1.0 ===
+        // Implements spec from ReferralFinder-CHECKLIST.md (verified 2026-04-29).
+        //
+        // Changes vs baseline:
+        //   - Section 6.2: Two-step query pattern for Payer Name (Account_Name)
+        //                  and Adjuster Name (Contact_Name) Lookup fields.
+        //                  Direct LIKE on Lookup columns produces INVALID_QUERY
+        //                  (Quirk 11.4). Resolves to source module IDs first,
+        //                  then filters Deals by `... in (...)` clause.
+        //   - Section 5: Style-2 two-row results layout. Primary row carries
+        //                existing columns; secondary row spans full width and
+        //                shows Payer and Adjuster names.
+        //   - Section 6.3: Specific error messages for empty Lookup pre-search
+        //                  results (e.g. "No payers match 'xyz'").
+        //
+        // Side-bugs intentionally retained per Option A scope (see Section 12):
+        //   - Duplicate Open Case button (12.1)
+        //   - Hardcoded status colors don't match real picklist values (12.2)
+        //   - sanitize() uses backslash-escaping instead of doubled-quote (12.3)
+
+        function log(msg) { console.log('[ReferralFinder v1.0]', msg); }
+
         ZOHO.embeddedApp.init().then(function(){
-            console.log("Magnolia ReferralFinder Widget Loaded");
+            log("Widget loaded");
         });
 
         document.querySelectorAll('input').forEach(function(input) {
@@ -235,11 +270,43 @@
             resultsDiv.innerHTML = '';
         }
 
+        // Quirk 11.3: COQL escape syntax is doubled single quote (O''Brien).
+        // The current sanitize() uses backslash-escaping which COQL does not
+        // recognize. Per Section 12.3, this is retained from baseline for v1.0.
         function sanitize(value) {
             return value.replace(/'/g, "\\'").trim();
         }
 
-        function searchReferrals() {
+        // --- Two-step Lookup query helpers (Section 6.2) ---
+
+        // Resolves a Payer Name search term to a list of Account record IDs.
+        // Returns { ids: string[], hadTerm: boolean } so callers can distinguish
+        // "user didn't search by Payer" from "user searched but no Accounts matched".
+        async function resolvePayerIds(searchTerm) {
+            if (!searchTerm) return { ids: null, hadTerm: false };
+            const cleaned = sanitize(searchTerm);
+            const query = "select id, Account_Name from Accounts where Account_Name like '%" + cleaned + "%' limit 200";
+            log('Step 1 query (Accounts): ' + query);
+            const resp = await ZOHO.CRM.API.coql({ select_query: query });
+            const records = resp.data || [];
+            log('Step 1 returned ' + records.length + ' Account(s)');
+            return { ids: records.map(r => r.id), hadTerm: true };
+        }
+
+        // Resolves an Adjuster Name search term to a list of Contact record IDs.
+        // Searches both First_Name and Last_Name with OR so the user can type either.
+        async function resolveAdjusterIds(searchTerm) {
+            if (!searchTerm) return { ids: null, hadTerm: false };
+            const cleaned = sanitize(searchTerm);
+            const query = "select id, First_Name, Last_Name from Contacts where (Last_Name like '%" + cleaned + "%' or First_Name like '%" + cleaned + "%') limit 200";
+            log('Step 1 query (Contacts): ' + query);
+            const resp = await ZOHO.CRM.API.coql({ select_query: query });
+            const records = resp.data || [];
+            log('Step 1 returned ' + records.length + ' Contact(s)');
+            return { ids: records.map(r => r.id), hadTerm: true };
+        }
+
+        async function searchReferrals() {
             const resultDiv = document.getElementById('results');
             resultDiv.innerHTML = '<div style="text-align:center; padding:20px; color:#666;">Searching records...</div>';
             resultDiv.style.display = 'block';
@@ -248,49 +315,97 @@
                 'Deal_Name': document.getElementById('record_name').value,
                 'Claim_Number': document.getElementById('claim_number').value,
                 'Referral_Number': document.getElementById('referral_id').value,
-'SSN': document.getElementById('ssn').value,
+                'SSN': document.getElementById('ssn').value,
                 'Claimant_DOB': document.getElementById('claimant_dob').value,
                 'payer_name': document.getElementById('payer_name').value,
                 'adjuster_name': document.getElementById('adjuster_name').value
             };
 
-            let conditions = [];
-            if (criteria['Deal_Name']) conditions.push("(Deal_Name like '%" + sanitize(criteria['Deal_Name']) + "%')");
-            if (criteria['Claim_Number']) conditions.push("(Claim_Number like '%" + sanitize(criteria['Claim_Number']) + "%')");
-            if (criteria['Referral_Number']) conditions.push("(Referral_Number like '%" + sanitize(criteria['Referral_Number']) + "%')");
-            if (criteria['SSN']) conditions.push("(SSN like '%" + sanitize(criteria['SSN']) + "%')");
-            if (criteria['Claimant_DOB']) conditions.push("(Claimant_DOB = '" + criteria['Claimant_DOB'] + "')");
-            
-            // Corrected lookups - removed .name suffix
-            if (criteria['payer_name']) conditions.push("(Account_Name like '%" + sanitize(criteria['payer_name']) + "%')");
-            if (criteria['adjuster_name']) conditions.push("(Contact_Name like '%" + sanitize(criteria['adjuster_name']) + "%')");
-
-            if (conditions.length === 0) {
+            // Validate at least one search term is present.
+            const anyValue = Object.values(criteria).some(v => v && v.trim());
+            if (!anyValue) {
                 showError('Please enter at least one search term.');
                 return;
             }
 
-            const selectQuery = 'select Deal_Name, Referral_Number, Claim_Number, Claimant_DOB, Referral_Status, id from Deals where ' + conditions.join(' AND ') + ' limit 50';
-            console.log("Query:", selectQuery);
+            try {
+                // --- Step 1: resolve Lookup display names to IDs (Section 6.2) ---
+                const [payerResult, adjusterResult] = await Promise.all([
+                    resolvePayerIds(criteria['payer_name']),
+                    resolveAdjusterIds(criteria['adjuster_name'])
+                ]);
 
-            ZOHO.CRM.API.coql({ select_query: selectQuery })
-                .then(function(data) {
-                    console.log("COQL Response:", data);
-                    if (data.data && data.data.length > 0) {
-                        displayResults(data.data);
-                    } else {
-                        showError('No referrals found matching your criteria.');
-                    }
-                })
-                .catch(function(error) {
-                    console.error("Search Failed:", error);
-                    showError('Search Error: ' + JSON.stringify(error));
-                });
+                // Section 6.3: short-circuit with specific error if a Lookup search returned zero matches.
+                if (payerResult.hadTerm && payerResult.ids.length === 0) {
+                    showError("No payers match '" + criteria['payer_name'] + "'.");
+                    return;
+                }
+                if (adjusterResult.hadTerm && adjusterResult.ids.length === 0) {
+                    showError("No adjusters match '" + criteria['adjuster_name'] + "'.");
+                    return;
+                }
+
+                // --- Step 2: build the final Deals query ---
+                let conditions = [];
+                if (criteria['Deal_Name']) conditions.push("(Deal_Name like '%" + sanitize(criteria['Deal_Name']) + "%')");
+                if (criteria['Claim_Number']) conditions.push("(Claim_Number like '%" + sanitize(criteria['Claim_Number']) + "%')");
+                if (criteria['Referral_Number']) conditions.push("(Referral_Number like '%" + sanitize(criteria['Referral_Number']) + "%')");
+                if (criteria['SSN']) conditions.push("(SSN like '%" + sanitize(criteria['SSN']) + "%')");
+                if (criteria['Claimant_DOB']) conditions.push("(Claimant_DOB = '" + criteria['Claimant_DOB'] + "')");
+
+                if (payerResult.hadTerm) {
+                    const idList = payerResult.ids.map(id => "'" + id + "'").join(',');
+                    conditions.push("(Account_Name in (" + idList + "))");
+                }
+                if (adjusterResult.hadTerm) {
+                    const idList = adjusterResult.ids.map(id => "'" + id + "'").join(',');
+                    conditions.push("(Contact_Name in (" + idList + "))");
+                }
+
+                const selectQuery =
+                    'select Deal_Name, Referral_Number, Claim_Number, Claimant_DOB, ' +
+                    'Referral_Status, Account_Name, Contact_Name, id ' +
+                    'from Deals where ' + conditions.join(' and ') + ' limit 50';
+                log('Step 2 query (Deals): ' + selectQuery);
+
+                const data = await ZOHO.CRM.API.coql({ select_query: selectQuery });
+                log('Step 2 response: ' + JSON.stringify(data).slice(0, 500));
+
+                if (data.data && data.data.length > 0) {
+                    displayResults(data.data);
+                } else {
+                    showError('No referrals found matching your criteria.');
+                }
+            } catch (error) {
+                log('Search failed: ' + JSON.stringify(error));
+                showError('Search Error: ' + JSON.stringify(error));
+            }
+        }
+
+        // Helper: extract display name from a Lookup field that may be returned
+        // as either {name, id} object, a plain string, or null/undefined.
+        function lookupName(val) {
+            if (!val) return '';
+            if (typeof val === 'object' && val.name) return val.name;
+            return String(val);
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
         function displayResults(records) {
             let html = '<div class="result-count">' + records.length + ' result' + (records.length !== 1 ? 's' : '') + ' found</div>';
-            html += '<table><thead><tr><th>Referral ID</th><th>Claimant Name</th><th>DOB</th><th>Claim #</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+            html += '<table><thead><tr>' +
+                '<th>Referral ID</th>' +
+                '<th>Claimant Name</th>' +
+                '<th>DOB</th>' +
+                '<th>Claim #</th>' +
+                '<th>Status</th>' +
+                '<th>Action</th>' +
+                '</tr></thead><tbody>';
 
             for (let i = 0; i < records.length; i++) {
                 let record = records[i];
@@ -300,19 +415,33 @@
                 let dob = record.Claimant_DOB || '-';
                 let status = record.Referral_Status || 'Active';
                 let recordId = record.id;
+                let payerName = lookupName(record.Account_Name) || '(none)';
+                let adjusterName = lookupName(record.Contact_Name) || '(none)';
 
+                // Section 12.2: hardcoded status colors don't match real picklist
+                // values; retained from baseline for v1.0.
                 let statusClass = 'status-pending';
                 if (status === 'Closed') statusClass = 'status-closed';
                 if (status === 'Active' || status === 'Approved') statusClass = 'status-active';
 
-                html += '<tr>' +
-                    '<td><strong>' + rID + '</strong></td>' +
-                    '<td>' + rName + '</td>' +
-                    '<td>' + dob + '</td>' +
-                    '<td>' + cNum + '</td>' +
-                    '<td><span class="status-badge ' + statusClass + '">' + status + '</span></td>' +
-                    '<td><button class="btn-open" onclick="openRecord(\'' + recordId + '\')">Open Case ↗️</button></td>' +
-                    '<td><button class="btn-open" onclick="openRecord(\'' + recordId + '\')">Open Case ↗️</button></td>' +
+                // Style 2: primary row carries the existing columns; secondary row
+                // spans full width below it with Payer and Adjuster.
+                // Section 12.1: duplicate Open Case button retained from baseline for v1.0.
+                html += '<tr class="primary-row">' +
+                    '<td><strong>' + escapeHtml(rID) + '</strong></td>' +
+                    '<td>' + escapeHtml(rName) + '</td>' +
+                    '<td>' + escapeHtml(dob) + '</td>' +
+                    '<td>' + escapeHtml(cNum) + '</td>' +
+                    '<td><span class="status-badge ' + statusClass + '">' + escapeHtml(status) + '</span></td>' +
+                    '<td><button class="btn-open" onclick="openRecord(\'' + recordId + '\')">Open Case ↗️</button>' +
+                    '<button class="btn-open" onclick="openRecord(\'' + recordId + '\')" style="margin-left:12px;">Open Case ↗️</button></td>' +
+                    '</tr>';
+                html += '<tr class="secondary-row">' +
+                    '<td colspan="6">' +
+                    '<span class="label">Payer:</span> ' + escapeHtml(payerName) +
+                    '<span class="sep">·</span>' +
+                    '<span class="label">Adjuster:</span> ' + escapeHtml(adjusterName) +
+                    '</td>' +
                     '</tr>';
             }
 
@@ -321,19 +450,20 @@
             resultsDiv.innerHTML = html;
             resultsDiv.style.display = 'block';
         }
-function openRecord(recordId) {
+
+        function openRecord(recordId) {
             ZOHO.CRM.UI.Record.open({
                 Entity: "Deals",
                 RecordID: recordId,
                 Target: "_blank"
             }).then(function(data){
-                console.log("Record Opened:", data);
+                log('Record Opened: ' + JSON.stringify(data));
             });
         }
 
         function showError(message) {
             const resultsDiv = document.getElementById('results');
-            resultsDiv.innerHTML = '<div class="error-message"><strong>⚠️ Status:</strong> ' + message + '</div>';
+            resultsDiv.innerHTML = '<div class="error-message"><strong>⚠️ Status:</strong> ' + escapeHtml(message) + '</div>';
             resultsDiv.style.display = 'block';
         }
     </script>
