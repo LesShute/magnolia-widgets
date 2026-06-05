@@ -3,7 +3,8 @@
 <head>
  <meta charset="UTF-8">
  <title>Smart Compose Widget</title>
- <script src="https://live.zwidgets.com/js-sdk/1.1/ZohoEmbededAppSDK.min.js"></script>
+ <!-- Zoho CRM Widget SDK v1.5 — required for Custom Button popup widgets -->
+ <script src="https://live.zwidgets.com/js-sdk/1.5/ZohoCRMWidget.min.js"></script>
  <style>
  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; margin: 0; background: #fff; }
  h3 { margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #1a1a1a; }
@@ -57,24 +58,41 @@
 
  ZOHO.embeddedApp.on("PageLoad", async function(data) {
  try {
- if (!data || !data.EntityId) return;
+ // Show raw data for debugging (remove later)
+ console.log("SmartCompose PageLoad data:", JSON.stringify(data));
 
- currentModule = data.Entity;
- currentRecordId = data.EntityId[0];
+ if (!data || (!data.EntityId && !data.entityId)) {
+ document.getElementById("loading").innerText = "Error: No record context found.";
+ return;
+ }
+
+ // Handle both camelCase and PascalCase response formats
+ currentModule = data.Entity || data.entity || "";
+ currentRecordId = Array.isArray(data.EntityId) ? data.EntityId[0] : (data.entityId || "");
+
+ if (!currentRecordId) {
+ document.getElementById("loading").innerText = "Error: Could not identify record.";
+ return;
+ }
 
  const response = await ZOHO.CRM.API.getRecord({
  Entity: currentModule,
  RecordID: currentRecordId
  });
 
- if (response.data && response.data.length > 0) {
+ console.log("SmartCompose getRecord response:", JSON.stringify(response));
+
+ if (response && response.data && response.data.length > 0) {
  renderUI(response.data[0]);
+ } else if (response && Array.isArray(response)) {
+ // SDK v1.5 may return array directly
+ renderUI(response[0]);
  } else {
- document.getElementById("loading").innerText = "Error: Could not retrieve data.";
+ document.getElementById("loading").innerText = "Error: Could not retrieve record data.";
  }
  } catch (error) {
- console.error("API Error:", error);
- document.getElementById("loading").innerText = "Error loading context.";
+ console.error("SmartCompose API Error:", error);
+ document.getElementById("loading").innerText = "Error: " + (error.message || "Failed to load data");
  }
  });
 
@@ -118,7 +136,7 @@
  });
 
  if (html === "") {
- listContainer.innerHTML = "<div style='text-align:center; padding: 20px; color: #999;'>No configured email fields found.</div>";
+ listContainer.innerHTML = "<div style='text-align:center; padding: 20px; color: #999;'>No configured email fields found in this record.</div>";
  document.getElementById("btn-send").style.display = "none";
  } else {
  listContainer.innerHTML = html;
@@ -127,7 +145,12 @@
 
  // Handle Cancel Button
  document.getElementById("btn-cancel").addEventListener("click", () => {
+ try {
  ZOHO.CRM.UI.Popup.close();
+ } catch(e) {
+ // Fallback if Popup API not available
+ window.close();
+ }
  });
 
  // Handle Send Button
@@ -164,15 +187,18 @@
  recordId: currentRecordId
  });
 
- // Close widget automatically
+ try {
  ZOHO.CRM.UI.Popup.close();
+ } catch(e) {
+ window.close();
+ }
  } catch (error) {
- console.error("sendMail failed:", error);
- alert("Failed to open the native composer.");
+ console.error("SmartCompose sendMail failed:", error);
+ alert("Failed to open the native composer. Error: " + (error.message || "Unknown error"));
  }
  });
 
  ZOHO.embeddedApp.init();
  </script>
 </body>
-</html>
+</html></｜DSML｜template>
