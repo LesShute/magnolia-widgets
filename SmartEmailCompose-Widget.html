@@ -161,6 +161,14 @@
  return parts.join("?");
  }
 
+ // Open a mailto: URL from an iframe reliably.
+ // Navigate the iframe itself to the mailto: protocol — browser handles this natively
+ // without triggering the OS app-chooser prompt that window.open() causes.
+ function openMailto(url) {
+ console.log("Navigating to:", url);
+ window.location.href = url;
+ }
+
  document.getElementById("btn-send").addEventListener("click", function() {
  console.log("Send button clicked");
  showError("");
@@ -215,7 +223,7 @@
  console.log("Zoho sendMail not available; using mailto: fallback");
  var mailtoUrl = buildMailto(toList, ccList, bccList);
  console.log("Opening:", mailtoUrl);
- window.open(mailtoUrl, "_blank");
+ openMailto(mailtoUrl);
  // Close the widget popup
  setTimeout(function() {
  try { ZOHO.CRM.UI.Popup.close(); } catch(e) {}
