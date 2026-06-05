@@ -148,7 +148,16 @@
  ZOHO.CRM.UI.Popup.close();
  });
 
+ document.getElementById("btn-cancel").addEventListener("click", function() {
+ console.log("Cancel clicked");
+ try { ZOHO.CRM.UI.Popup.close(); } catch(e) { showError('Popup.close error: ' + e.message); }
+ });
+
  document.getElementById("btn-send").addEventListener("click", function() {
+ console.log("Send button clicked");
+ showError(""); // clear any prior error
+
+ try {
  var toList = [];
  var ccList = [];
  var bccList = [];
@@ -169,7 +178,26 @@
  }
 
  if (toList.length === 0 && ccList.length === 0 && bccList.length === 0) {
- alert("Please select at least one recipient.");
+ showError("Please select at least one recipient.");
+ return;
+ }
+
+ // Log what we're sending
+ console.log("sendMail params:", JSON.stringify({
+ to: toList.join(","),
+ cc: ccList.join(","),
+ bcc: bccList.join(","),
+ module: "Deals",
+ recordId: currentRecordId
+ }));
+
+ // Check if ZOHO.CRM.Email exists
+ if (!ZOHO.CRM.Email) {
+ showError("ZOHO.CRM.Email is not available in this context.");
+ return;
+ }
+ if (!ZOHO.CRM.Email.sendMail) {
+ showError("ZOHO.CRM.Email.sendMail is not available.");
  return;
  }
 
@@ -180,11 +208,21 @@
  module: "Deals",
  recordId: currentRecordId
  }).then(function() {
- ZOHO.CRM.UI.Popup.close();
+ console.log("sendMail succeeded");
+ // Give Zoho a moment to open the composer before closing
+ setTimeout(function() {
+ try { ZOHO.CRM.UI.Popup.close(); } catch(e) {
+ console.log("Popup.close after sendMail:", e.message);
+ }
+ }, 500);
  }).catch(function(e) {
- alert("sendMail failed: " + (e.message || JSON.stringify(e)));
+ showError("sendMail error: " + (e.message || JSON.stringify(e)));
  console.error("sendMail error:", e);
  });
+ } catch(e) {
+ showError("Button handler error: " + (e.message || JSON.stringify(e)));
+ console.error("Click handler error:", e);
+ }
  });
  </script>
 </body>
