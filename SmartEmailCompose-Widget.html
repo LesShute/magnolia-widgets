@@ -153,9 +153,17 @@
  try { ZOHO.CRM.UI.Popup.close(); } catch(e) { showError('Popup.close error: ' + e.message); }
  });
 
+ // Build mailto: link from selected recipients
+ function buildMailto(toList, ccList, bccList) {
+ var parts = ["mailto:" + toList.join(",")];
+ if (ccList.length) parts.push("cc=" + ccList.join(","));
+ if (bccList.length) parts.push("bcc=" + bccList.join(","));
+ return parts.join("?");
+ }
+
  document.getElementById("btn-send").addEventListener("click", function() {
  console.log("Send button clicked");
- showError(""); // clear any prior error
+ showError("");
 
  try {
  var toList = [];
@@ -182,25 +190,12 @@
  return;
  }
 
- // Log what we're sending
- console.log("sendMail params:", JSON.stringify({
- to: toList.join(","),
- cc: ccList.join(","),
- bcc: bccList.join(","),
- module: "Deals",
- recordId: currentRecordId
- }));
+ // Log what we collected
+ console.log("Mail params:", JSON.stringify({ to: toList, cc: ccList, bcc: bccList }));
 
- // Check if ZOHO.CRM.Email exists
- if (!ZOHO.CRM.Email) {
- showError("ZOHO.CRM.Email is not available in this context.");
- return;
- }
- if (!ZOHO.CRM.Email.sendMail) {
- showError("ZOHO.CRM.Email.sendMail is not available.");
- return;
- }
-
+ // Attempt Zoho native composer first (may not be available in widget context)
+ if (ZOHO.CRM && ZOHO.CRM.Email && ZOHO.CRM.Email.sendMail) {
+ console.log("Using ZOHO.CRM.Email.sendMail");
  ZOHO.CRM.Email.sendMail({
  to: toList.join(","),
  cc: ccList.join(","),
@@ -209,16 +204,23 @@
  recordId: currentRecordId
  }).then(function() {
  console.log("sendMail succeeded");
- // Give Zoho a moment to open the composer before closing
  setTimeout(function() {
- try { ZOHO.CRM.UI.Popup.close(); } catch(e) {
- console.log("Popup.close after sendMail:", e.message);
- }
+ try { ZOHO.CRM.UI.Popup.close(); } catch(e) {}
  }, 500);
  }).catch(function(e) {
- showError("sendMail error: " + (e.message || JSON.stringify(e)));
- console.error("sendMail error:", e);
+ showError("sendMail failed: " + (e.message || JSON.stringify(e)));
  });
+ } else {
+ // Fallback: open system email client via mailto:
+ console.log("Zoho sendMail not available; using mailto: fallback");
+ var mailtoUrl = buildMailto(toList, ccList, bccList);
+ console.log("Opening:", mailtoUrl);
+ window.open(mailtoUrl, "_blank");
+ // Close the widget popup
+ setTimeout(function() {
+ try { ZOHO.CRM.UI.Popup.close(); } catch(e) {}
+ }, 200);
+ }
  } catch(e) {
  showError("Button handler error: " + (e.message || JSON.stringify(e)));
  console.error("Click handler error:", e);
