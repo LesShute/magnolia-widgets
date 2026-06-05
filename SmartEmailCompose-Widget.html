@@ -2,12 +2,16 @@
 <html>
 <head>
  <meta charset="UTF-8">
- <title>Smart Compose Widget</title>
- <script src="https://live.zwidgets.com/js-sdk/1.1/ZohoEmbededAppSDK.min.js"></script>
+ <meta name="viewport" content="width=device-width, initial-scale=1.0">
+ <title>Smart Compose</title>
+ <!-- Load SDK from Zoho CDN instead of live.zwidgets.com -->
+ <script src="https://crm.zohocdn.com/crm/widgetsdk/v1/ZohoEmbededAppSDK.js"></script>
  <style>
  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; margin: 0; background: #fff; }
  h3 { margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #1a1a1a; }
  .subtitle { font-size: 12px; color: #666; margin-bottom: 16px; }
+ #loading { color: #666; font-size: 14px; text-align: center; margin-top: 20px; }
+ #app-container { display: none; }
  .kai-row { display: flex; align-items: center; padding: 8px 10px; border-radius: 4px; margin-bottom: 4px; border: 1px solid #e9ecef; background: #f8f9fa; }
  .kai-row:hover { background: #e9ecef; }
  .kai-row.disabled { opacity: 0.4; cursor: not-allowed; }
@@ -22,8 +26,6 @@
  .kai-primary:hover { background: #1565c0; }
  .kai-secondary { background: #e9ecef; color: #333; }
  .kai-secondary:hover { background: #dee2e6; }
- #loading { color: #666; font-size: 14px; text-align: center; margin-top: 20px; }
- #app-container { display: none; }
  </style>
 </head>
 <body>
@@ -31,11 +33,9 @@
  <div id="loading">Loading record data...</div>
 
  <div id="app-container">
- <h3>📧 Smart Compose</h3>
+ <h3>&#128231; Smart Compose</h3>
  <div class="subtitle">Select recipients and routing.</div>
-
  <div id="email-list"></div>
-
  <div class="kai-actions">
  <button class="kai-btn kai-secondary" id="btn-cancel">Cancel</button>
  <button class="kai-btn kai-primary" id="btn-send">Open Email Composer</button>
@@ -90,30 +90,26 @@
  const name = src.nameField ? (record[src.nameField] || "").trim() : "";
 
  if (email) {
- html += `
- <div class="kai-row" data-email="${email}">
- <input type="checkbox" checked class="email-cb" />
- <div class="kai-info">
- <div class="kai-role">${src.role}</div>
- <div class="kai-email">${email} ${name ? '— ' + name : ''}</div>
- </div>
- <select class="kai-select route-select">
- <option value="to">To</option>
- <option value="cc">Cc</option>
- <option value="bcc">Bcc</option>
- </select>
- </div>
- `;
+ html += '<div class="kai-row" data-email="' + email.replace(/"/g,'&quot;') + '">'
+ + '<input type="checkbox" checked class="email-cb" />'
+ + '<div class="kai-info">'
+ + '<div class="kai-role">' + src.role + '</div>'
+ + '<div class="kai-email">' + email.replace(/"/g,'&quot;') + (name ? ' &mdash; ' + name.replace(/"/g,'&quot;') : '') + '</div>'
+ + '</div>'
+ + '<select class="kai-select route-select">'
+ + '<option value="to">To</option>'
+ + '<option value="cc">Cc</option>'
+ + '<option value="bcc">Bcc</option>'
+ + '</select>'
+ + '</div>';
  } else {
- html += `
- <div class="kai-row disabled">
- <input type="checkbox" disabled />
- <div class="kai-info">
- <div class="kai-role">${src.role}</div>
- <div class="kai-email" style="font-style:italic;">No email on record</div>
- </div>
- </div>
- `;
+ html += '<div class="kai-row disabled">'
+ + '<input type="checkbox" disabled />'
+ + '<div class="kai-info">'
+ + '<div class="kai-role">' + src.role + '</div>'
+ + '<div class="kai-email" style="font-style:italic;">No email on record</div>'
+ + '</div>'
+ + '</div>';
  }
  });
 
@@ -125,20 +121,18 @@
  }
  }
 
- // Handle Cancel Button
- document.getElementById("btn-cancel").addEventListener("click", () => {
+ document.getElementById("btn-cancel").addEventListener("click", function() {
  ZOHO.CRM.UI.Popup.close();
  });
 
- // Handle Send Button
- document.getElementById("btn-send").addEventListener("click", async () => {
+ document.getElementById("btn-send").addEventListener("click", async function() {
  const toList = [];
  const ccList = [];
  const bccList = [];
 
  const rows = document.querySelectorAll('.kai-row:not(.disabled)');
 
- rows.forEach(row => {
+ rows.forEach(function(row) {
  const cb = row.querySelector('.email-cb');
  if (cb && cb.checked) {
  const email = row.getAttribute('data-email');
@@ -163,8 +157,6 @@
  module: currentModule,
  recordId: currentRecordId
  });
-
- // Close widget automatically
  ZOHO.CRM.UI.Popup.close();
  } catch (error) {
  console.error("sendMail failed:", error);
