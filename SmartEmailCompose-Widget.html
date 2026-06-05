@@ -4,13 +4,14 @@
  <meta charset="UTF-8">
  <meta name="viewport" content="width=device-width, initial-scale=1.0">
  <title>Smart Compose</title>
- <!-- Load SDK from Zoho CDN instead of live.zwidgets.com -->
- <script src="https://crm.zohocdn.com/crm/widgetsdk/v1/ZohoEmbededAppSDK.js"></script>
+ <!-- Same proven SDK source as MagnoliaMap v3.23 (works in production) -->
+ <script src="https://live.zwidgets.com/js-sdk/1.2/ZohoEmbededAppSDK.min.js"></script>
  <style>
  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; margin: 0; background: #fff; }
  h3 { margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #1a1a1a; }
  .subtitle { font-size: 12px; color: #666; margin-bottom: 16px; }
  #loading { color: #666; font-size: 14px; text-align: center; margin-top: 20px; }
+ #error { display: none; color: #d32f2f; font-size: 13px; text-align: center; margin-top: 12px; padding: 10px; background: #fdecea; border-radius: 4px; }
  #app-container { display: none; }
  .kai-row { display: flex; align-items: center; padding: 8px 10px; border-radius: 4px; margin-bottom: 4px; border: 1px solid #e9ecef; background: #f8f9fa; }
  .kai-row:hover { background: #e9ecef; }
@@ -31,10 +32,11 @@
 <body>
 
  <div id="loading">Loading record data...</div>
+ <div id="error"></div>
 
  <div id="app-container">
  <h3>&#128231; Smart Compose</h3>
- <div class="subtitle">Select recipients and routing.</div>
+ <div class="subtitle">Select recipients and routing, then open the native email composer.</div>
  <div id="email-list"></div>
  <div class="kai-actions">
  <button class="kai-btn kai-secondary" id="btn-cancel">Cancel</button>
@@ -43,7 +45,7 @@
  </div>
 
  <script>
- const EMAIL_SOURCES = [
+ var EMAIL_SOURCES = [
  { apiName: "Adjuster_Email", role: "Adjuster", nameField: "Adjuster_Name" },
  { apiName: "Email", role: "Claimant", nameField: "Claimant_Name" },
  { apiName: "Physician_Email", role: "Physician", nameField: "Physician_Name" },
@@ -52,42 +54,63 @@
  { apiName: "Atty_Email", role: "Attorney", nameField: "Attorney_Name" }
  ];
 
- let currentModule = "";
- let currentRecordId = "";
+ var currentRecordId = "";
 
- ZOHO.embeddedApp.on("PageLoad", async function(data) {
- try {
- if (!data || !data.EntityId) return;
+ // Helper to show errors in the widget UI
+ function showError(msg) {
+ var el = document.getElementById("error");
+ el.innerText = msg;
+ el.style.display = "block";
+ }
 
- currentModule = data.Entity;
- currentRecordId = data.EntityId[0];
+ ZOHO.embeddedApp.on("PageLoad", function(data) {
+ console.log("SmartCompose PageLoad data:", JSON.stringify(data));
 
- const response = await ZOHO.CRM.API.getRecord({
- Entity: currentModule,
- RecordID: currentRecordId
+ if (!data || !data.EntityId) {
+ showError("No record context received from Zoho.");
+ return;
+ }
+
+ // Button widget may pass EntityId as string or array; normalize to string
+ // Same approach as MagnoliaMap: pass the record ID directly
+ var recordId = Array.isArray(data.EntityId) ? data.EntityId[0] : data.EntityId;
+ currentRecordId = recordId;
+ loadReferralData(recordId);
  });
 
- if (response.data && response.data.length > 0) {
- renderUI(response.data[0]);
+ ZOHO.embeddedApp.init().then(function() {
+ console.log("SmartCompose SDK initialized");
+ }).catch(function(e) {
+ showError("SDK init failed: " + (e.message || JSON.stringify(e)));
+ });
+
+ function loadReferralData(recordId) {
+ // Hardcode "Deals" like MagnoliaMap — same Referrals module
+ ZOHO.CRM.API.getRecord({ Entity: "Deals", RecordID: recordId })
+ .then(function(resp) {
+ if (resp.data && resp.data[0]) {
+ renderUI(resp.data[0]);
  } else {
- document.getElementById("loading").innerText = "Error: Could not retrieve data.";
+ showError("Record not found (empty response).");
  }
- } catch (error) {
- console.error("API Error:", error);
- document.getElementById("loading").innerText = "Error loading context.";
- }
+ })
+ .catch(function(e) {
+ showError("API error: " + (e.message || JSON.stringify(e)));
+ console.error("getRecord error:", e);
  });
+ }
 
  function renderUI(record) {
  document.getElementById("loading").style.display = "none";
  document.getElementById("app-container").style.display = "block";
 
- const listContainer = document.getElementById("email-list");
- let html = "";
+ var listContainer = document.getElementById("email-list");
+ var html = "";
 
- EMAIL_SOURCES.forEach(src => {
- const email = (record[src.apiName] || "").trim();
- const name = src.nameField ? (record[src.nameField] || "").trim() : "";
+ for (var i = 0; i < EMAIL_SOURCES.length; i++) {
+ var src = EMAIL_SOURCES[i];
+ var email = (record[src.apiName] || "").toString().trim();
+ var name = src.nameField ? (record[src.nameField] || "").toString().trim() : "";
 
  if (email) {
  html += '<div class="kai-row" data-email="' + email.replace(/"/g,'&quot;') + '">'
@@ -111,10 +134,10 @@
  + '</div>'
  + '</div>';
  }
- });
+ }
 
  if (html === "") {
- listContainer.innerHTML = "<div style='text-align:center; padding: 20px; color: #999;'>No configured email fields found.</div>";
+ listContainer.innerHTML = "<div style='text-align:center; padding: 20px; color: #999;'>No configured email fields found on this record.</div>";
  document.getElementById("btn-send").style.display = "none";
  } else {
  listContainer.innerHTML = html;
@@ -125,46 +148,44 @@
  ZOHO.CRM.UI.Popup.close();
  });
 
- document.getElementById("btn-send").addEventListener("click", async function() {
- const toList = [];
- const ccList = [];
- const bccList = [];
+ document.getElementById("btn-send").addEventListener("click", function() {
+ var toList = [];
+ var ccList = [];
+ var bccList = [];
 
- const rows = document.querySelectorAll('.kai-row:not(.disabled)');
+ var rows = document.querySelectorAll('.kai-row:not(.disabled)');
 
- rows.forEach(function(row) {
- const cb = row.querySelector('.email-cb');
+ for (var i = 0; i < rows.length; i++) {
+ var row = rows[i];
+ var cb = row.querySelector('.email-cb');
  if (cb && cb.checked) {
- const email = row.getAttribute('data-email');
- const routing = row.querySelector('.route-select').value;
+ var email = row.getAttribute('data-email');
+ var routing = row.querySelector('.route-select').value;
 
  if (routing === 'to') toList.push(email);
  if (routing === 'cc') ccList.push(email);
  if (routing === 'bcc') bccList.push(email);
  }
- });
+ }
 
  if (toList.length === 0 && ccList.length === 0 && bccList.length === 0) {
  alert("Please select at least one recipient.");
  return;
  }
 
- try {
- await ZOHO.CRM.Email.sendMail({
+ ZOHO.CRM.Email.sendMail({
  to: toList.join(","),
  cc: ccList.join(","),
  bcc: bccList.join(","),
- module: currentModule,
+ module: "Deals",
  recordId: currentRecordId
- });
+ }).then(function() {
  ZOHO.CRM.UI.Popup.close();
- } catch (error) {
- console.error("sendMail failed:", error);
- alert("Failed to open the native composer.");
- }
+ }).catch(function(e) {
+ alert("sendMail failed: " + (e.message || JSON.stringify(e)));
+ console.error("sendMail error:", e);
  });
-
- ZOHO.embeddedApp.init();
+ });
  </script>
 </body>
 </html>
