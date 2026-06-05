@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+ <meta charset="UTF-8">
+ <title>Smart Compose Widget</title>
+ <script src="https://live.zwidgets.com/js-sdk/1.1/ZohoEmbededAppSDK.min.js"></script>
+ <style>
+ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 20px; margin: 0; background: #fff; }
+ h3 { margin: 0 0 4px 0; font-size: 16px; font-weight: 600; color: #1a1a1a; }
+ .subtitle { font-size: 12px; color: #666; margin-bottom: 16px; }
+ .kai-row { display: flex; align-items: center; padding: 8px 10px; border-radius: 4px; margin-bottom: 4px; border: 1px solid #e9ecef; background: #f8f9fa; }
+ .kai-row:hover { background: #e9ecef; }
+ .kai-row.disabled { opacity: 0.4; cursor: not-allowed; }
+ .kai-row input[type='checkbox'] { margin-right: 10px; cursor: pointer; }
+ .kai-info { flex: 1; min-width: 0; }
+ .kai-role { font-weight: 600; font-size: 13px; color: #333; }
+ .kai-email { font-size: 11px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+ .kai-select { font-size: 11px; color: #1976d2; border: 1px solid #ccc; background: #fff; border-radius: 3px; padding: 2px 4px; cursor: pointer; }
+ .kai-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid #e9ecef; }
+ .kai-btn { padding: 8px 18px; font-size: 13px; font-weight: 500; border: none; border-radius: 4px; cursor: pointer; }
+ .kai-primary { background: #1976d2; color: #fff; }
+ .kai-primary:hover { background: #1565c0; }
+ .kai-secondary { background: #e9ecef; color: #333; }
+ .kai-secondary:hover { background: #dee2e6; }
+ #loading { color: #666; font-size: 14px; text-align: center; margin-top: 20px; }
+ #app-container { display: none; }
+ </style>
+</head>
+<body>
+
+ <div id="loading">Loading record data...</div>
+
+ <div id="app-container">
+ <h3>📧 Smart Compose</h3>
+ <div class="subtitle">Select recipients and routing.</div>
+
+ <div id="email-list"></div>
+
+ <div class="kai-actions">
+ <button class="kai-btn kai-secondary" id="btn-cancel">Cancel</button>
+ <button class="kai-btn kai-primary" id="btn-send">Open Email Composer</button>
+ </div>
+ </div>
+
+ <script>
+ const EMAIL_SOURCES = [
+ { apiName: "Adjuster_Email", role: "Adjuster", nameField: "Adjuster_Name" },
+ { apiName: "Email", role: "Claimant", nameField: "Claimant_Name" },
+ { apiName: "Physician_Email", role: "Physician", nameField: "Physician_Name" },
+ { apiName: "NCM_Email", role: "NCM", nameField: "NCM_Name" },
+ { apiName: "Prov_Email", role: "Provider", nameField: "Provider_Name" },
+ { apiName: "Atty_Email", role: "Attorney", nameField: "Attorney_Name" }
+ ];
+
+ let currentModule = "";
+ let currentRecordId = "";
+
+ ZOHO.embeddedApp.on("PageLoad", async function(data) {
+ try {
+ if (!data || !data.EntityId) return;
+
+ currentModule = data.Entity;
+ currentRecordId = data.EntityId[0];
+
+ const response = await ZOHO.CRM.API.getRecord({
+ Entity: currentModule,
+ RecordID: currentRecordId
+ });
+
+ if (response.data && response.data.length > 0) {
+ renderUI(response.data[0]);
+ } else {
+ document.getElementById("loading").innerText = "Error: Could not retrieve data.";
+ }
+ } catch (error) {
+ console.error("API Error:", error);
+ document.getElementById("loading").innerText = "Error loading context.";
+ }
+ });
+
+ function renderUI(record) {
+ document.getElementById("loading").style.display = "none";
+ document.getElementById("app-container").style.display = "block";
+
+ const listContainer = document.getElementById("email-list");
+ let html = "";
+
+ EMAIL_SOURCES.forEach(src => {
+ const email = (record[src.apiName] || "").trim();
+ const name = src.nameField ? (record[src.nameField] || "").trim() : "";
+
+ if (email) {
+ html += `
+ <div class="kai-row" data-email="${email}">
+ <input type="checkbox" checked class="email-cb" />
+ <div class="kai-info">
+ <div class="kai-role">${src.role}</div>
+ <div class="kai-email">${email} ${name ? '— ' + name : ''}</div>
+ </div>
+ <select class="kai-select route-select">
+ <option value="to">To</option>
+ <option value="cc">Cc</option>
+ <option value="bcc">Bcc</option>
+ </select>
+ </div>
+ `;
+ } else {
+ html += `
+ <div class="kai-row disabled">
+ <input type="checkbox" disabled />
+ <div class="kai-info">
+ <div class="kai-role">${src.role}</div>
+ <div class="kai-email" style="font-style:italic;">No email on record</div>
+ </div>
+ </div>
+ `;
+ }
+ });
+
+ if (html === "") {
+ listContainer.innerHTML = "<div style='text-align:center; padding: 20px; color: #999;'>No configured email fields found.</div>";
+ document.getElementById("btn-send").style.display = "none";
+ } else {
+ listContainer.innerHTML = html;
+ }
+ }
+
+ // Handle Cancel Button
+ document.getElementById("btn-cancel").addEventListener("click", () => {
+ ZOHO.CRM.UI.Popup.close();
+ });
+
+ // Handle Send Button
+ document.getElementById("btn-send").addEventListener("click", async () => {
+ const toList = [];
+ const ccList = [];
+ const bccList = [];
+
+ const rows = document.querySelectorAll('.kai-row:not(.disabled)');
+
+ rows.forEach(row => {
+ const cb = row.querySelector('.email-cb');
+ if (cb && cb.checked) {
+ const email = row.getAttribute('data-email');
+ const routing = row.querySelector('.route-select').value;
+
+ if (routing === 'to') toList.push(email);
+ if (routing === 'cc') ccList.push(email);
+ if (routing === 'bcc') bccList.push(email);
+ }
+ });
+
+ if (toList.length === 0 && ccList.length === 0 && bccList.length === 0) {
+ alert("Please select at least one recipient.");
+ return;
+ }
+
+ try {
+ await ZOHO.CRM.Email.sendMail({
+ to: toList.join(","),
+ cc: ccList.join(","),
+ bcc: bccList.join(","),
+ module: currentModule,
+ recordId: currentRecordId
+ });
+
+ // Close widget automatically
+ ZOHO.CRM.UI.Popup.close();
+ } catch (error) {
+ console.error("sendMail failed:", error);
+ alert("Failed to open the native composer.");
+ }
+ });
+
+ ZOHO.embeddedApp.init();
+ </script>
+</body>
+</html>
