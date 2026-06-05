@@ -161,12 +161,43 @@
  return parts.join("?");
  }
 
- // Open a mailto: URL from an iframe reliably.
- // Navigate the iframe itself to the mailto: protocol — browser handles this natively
- // without triggering the OS app-chooser prompt that window.open() causes.
- function openMailto(url) {
- console.log("Navigating to:", url);
- window.location.href = url;
+ // Open email by popping out to a new window.
+ // From an iframe, window.open() creates a new top-level window which
+ // CAN handle protocol navigation (mailto:) without the OS chooser dialog.
+ function openEmail(toList, ccList, bccList) {
+ var url = "mailto:" + encodeURIComponent(toList.join(",")) + "?"
+ + "cc=" + encodeURIComponent(ccList.join(",")) + "&bcc=" + encodeURIComponent(bccList.join(","));
+ console.log("Opening email via popup:", url);
+
+ // Try opening a tiny popup window first, then navigate it to mailto:
+ // Popups are top-level windows so protocol handlers work properly.
+ var popup = window.open(url, "_blank", "width=1,height=1,left=-1000,top=-1000");
+ if (popup && !popup.closed) {
+ console.log("Popup opened, navigating to mailto:");
+ // Close the widget
+ setTimeout(function() {
+ try { ZOHO.CRM.UI.Popup.close(); } catch(e) { }
+ }, 300);
+ } else {
+ // Popup blocked — use clipboard fallback
+ console.log("Popup blocked, copying to clipboard");
+ var emailText = "To: " + toList.join(", ");
+ if (ccList.length) emailText += "\nCc: " + ccList.join(", ");
+ if (bccList.length) emailText += "\nBcc: " + bccList.join(", ");
+
+ var ta = document.createElement("textarea");
+ ta.value = emailText;
+ ta.style.position = "fixed";
+ ta.style.opacity = "0";
+ document.body.appendChild(ta);
+ ta.select();
+ document.execCommand("copy");
+ document.body.removeChild(ta);
+
+ showError("Emails copied! Use Zoho's email button on the record to send.");
+ document.getElementById("btn-send").style.display = "none";
+ document.getElementById("btn-cancel").innerText = "Close";
+ }
  }
 
  document.getElementById("btn-send").addEventListener("click", function() {
@@ -219,11 +250,10 @@
  showError("sendMail failed: " + (e.message || JSON.stringify(e)));
  });
  } else {
- // Fallback: open system email client via mailto:
- console.log("Zoho sendMail not available; using mailto: fallback");
- var mailtoUrl = buildMailto(toList, ccList, bccList);
- console.log("Opening:", mailtoUrl);
- openMailto(mailtoUrl);
+ // Fallback: pop up a new window which can handle mailto: as a top-level window
+ console.log("Zoho sendMail not available; opening email via popup");
+ openEmail(toList, ccList, bccList);
+ }
  // Close the widget popup
  setTimeout(function() {
  try { ZOHO.CRM.UI.Popup.close(); } catch(e) {}
