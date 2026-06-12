@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Activity Hub — Validation Test v1.0</title>
+<!--
+  ACTIVITY HUB VALIDATION TEST WIDGET
+  Magnolia CompCare / Kairos Kinetics — June 2026
+
+  PURPOSE: Validate every technical assumption of the proposed Activity Hub
+  widget BEFORE committing to a full build. Runs automated gates and shows
+  a live searchable timeline of fetched data.
+
+  SDK VERSION: 1.5 — current official version per Zoho Widget SDK docs.
+  (1.2 passed Stage 1 / standard view but the bridge never connected in
+  Canvas; 1.5 is the Canvas-era SDK. June 2026.)
+-->
+<script src="https://live.zwidgets.com/js-sdk/1.5/ZohoEmbededAppSDK.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+         font-size: 13px; color: #2c3e50; background: #fff; padding: 12px; }
+  h2 { font-size: 15px; margin-bottom: 8px; }
+  h3 { font-size: 13px; margin: 14px 0 6px; }
+  .gates { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+           gap: 6px; margin-bottom: 10px; }
+  .gate { border: 1px solid #dfe4e8; border-radius: 6px; padding: 7px 9px;
+          background: #f8f9fa; display: flex; justify-content: space-between;
+          align-items: center; gap: 8px; }
+  .gate .label { font-weight: 600; }
+  .gate .detail { font-size: 11px; color: #7f8c8d; }
+  .badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px;
+           white-space: nowrap; }
+  .pending { background: #fff3cd; color: #856404; }
+  .pass    { background: #d4edda; color: #155724; }
+  .fail    { background: #f8d7da; color: #721c24; }
+  .skip    { background: #e2e3e5; color: #41464b; }
+  .toolbar { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; align-items: center; }
+  .toolbar input[type=text] { flex: 1; min-width: 160px; padding: 6px 9px;
+           border: 1px solid #ccd4da; border-radius: 5px; font-size: 13px; }
+  .chip { border: 1px solid #ccd4da; background: #fff; border-radius: 14px;
+          padding: 4px 11px; font-size: 12px; cursor: pointer; }
+  .chip.active { background: #2c3e50; color: #fff; border-color: #2c3e50; }
+  button.action { background: #2c7be5; color: #fff; border: 0; border-radius: 5px;
+          padding: 6px 12px; font-size: 12px; cursor: pointer; }
+  button.action:disabled { background: #b8c4ce; cursor: not-allowed; }
+  button.secondary { background: #6c757d; }
+  #timeline { border: 1px solid #dfe4e8; border-radius: 6px; max-height: 340px;
+          overflow-y: auto; }
+  .item { padding: 8px 10px; border-bottom: 1px solid #eef1f3; }
+  .item:last-child { border-bottom: 0; }
+  .item .meta { font-size: 11px; color: #7f8c8d; margin-bottom: 2px; }
+  .item .type { font-weight: 700; font-size: 10px; padding: 1px 6px; border-radius: 3px;
+          margin-right: 6px; }
+  .t-note { background: #e3f2fd; color: #1565c0; }
+  .t-email { background: #fce4ec; color: #ad1457; }
+  .t-file { background: #e8f5e9; color: #2e7d32; }
+  .t-task { background: #fff3e0; color: #e65100; }
+  .t-call { background: #ede7f6; color: #4527a0; }
+  .item .body { font-size: 12.5px; }
+  #log { background: #1e272e; color: #d2dae2; font-family: ui-monospace, Menlo, Consolas,
+         monospace; font-size: 11px; padding: 10px; border-radius: 6px; max-height: 200px;
+         overflow-y: auto; white-space: pre-wrap; margin-top: 10px; }
+  .hint { font-size: 11.5px; color: #7f8c8d; margin: 6px 0; }
+  .writes { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+</style>
+</head>
+<body>
+
+<h2>Activity Hub — Validation Test v1.1 (SDK 1.5) <span id="recBadge" class="badge pending">waiting for record…</span></h2>
+<p class="hint">Automated gates run on load. When done, click <b>Copy Diagnostic Log</b> and paste the result back into Claude.</p>
+
+<div class="gates" id="gates"></div>
+
+<h3>Write Tests (run manually after fetch gates complete)</h3>
+<div class="writes">
+  <button class="action" id="btnNote" disabled>Add Test Note</button>
+  <input type="file" id="fileInput" disabled>
+  <button class="action" id="btnFile" disabled>Upload Test File</button>
+  <button class="action secondary" id="btnCopy">Copy Diagnostic Log</button>
+</div>
+
+<h3>Unified Timeline (live demo of the payoff)</h3>
+<div class="toolbar">
+  <input type="text" id="search" placeholder="Search everything… (type to filter instantly)">
+  <span class="chip active" data-f="all">All</span>
+  <span class="chip" data-f="note">Notes</span>
+  <span class="chip" data-f="email">Emails</span>
+  <span class="chip" data-f="file">Files</span>
+  <span class="chip" data-f="task">Tasks</span>
+  <span class="chip" data-f="call">Calls</span>
+  <span class="chip" id="sortChip" data-sort="desc">Newest first ▼</span>
+</div>
+<div id="timeline"><div class="item">No data yet.</div></div>
+
+<div id="log"></div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ */
+/* Gate registry                                                       */
+/* ------------------------------------------------------------------ */
+const GATES = [
+  { id: "g0", label: "0. Page loads (you can read this)" },
+  { id: "g1", label: "1. SDK script loaded" },
+  { id: "g2", label: "2. PageLoad fired / EntityId received" },
+  { id: "g3", label: "3. Notes fetch" },
+  { id: "g4", label: "4. Attachments fetch" },
+  { id: "g5", label: "5. Emails fetch" },
+  { id: "g6", label: "6. Tasks fetch (name discovery)" },
+  { id: "g7", label: "7. Calls fetch (name discovery)" },
+  { id: "g8", label: "8. Write: addNotes" },
+  { id: "g9", label: "9. Write: attachFile" }
+];
+
+const state = { recordId: null, items: [], filter: "all", sort: "desc", logLines: [] };
+
+function log(msg) {
+  const line = new Date().toISOString().substr(11, 8) + "  " + msg;
+  state.logLines.push(line);
+  const el = document.getElementById("log");
+  el.textContent = state.logLines.join("\n");
+  el.scrollTop = el.scrollHeight;
+}
+
+function setGate(id, status, detail) {
+  const el = document.querySelector(`#${id} .badge`);
+  el.className = "badge " + status;
+  el.textContent = status.toUpperCase();
+  if (detail) document.querySelector(`#${id} .detail`).textContent = detail;
+  log(`GATE ${id} → ${status.toUpperCase()}${detail ? " (" + detail + ")" : ""}`);
+}
+
+/* Render gate cards */
+document.getElementById("gates").innerHTML = GATES.map(g =>
+  `<div class="gate" id="${g.id}">
+     <div><div class="label">${g.label}</div><div class="detail"></div></div>
+     <span class="badge pending">PENDING</span>
+   </div>`).join("");
+
+setGate("g0", "pass", "HTML rendered");
+
+/* Environment probe — tells us what container we're living in */
+try {
+  log("PROBE in-iframe: " + (window.self !== window.top));
+  log("PROBE location: " + window.location.href);
+  log("PROBE referrer: " + (document.referrer || "(empty)"));
+  log("PROBE window.name: " + (window.name || "(empty)"));
+} catch (e) { log("PROBE error: " + e.message); }
+
+/* ------------------------------------------------------------------ */
+/* Gate 1: SDK present?                                                */
+/* ------------------------------------------------------------------ */
+if (typeof ZOHO === "undefined" || !ZOHO.embeddedApp) {
+  setGate("g1", "fail", "ZOHO SDK object missing — check script src / version");
+  log("FATAL: SDK not loaded. If opened directly in a browser (outside Zoho), this is EXPECTED for the script handshake but the script itself should still load. A 404 on live.zwidgets.com means: copy the script tag from MagnoliaMap.");
+} else {
+  setGate("g1", "pass");
+
+  /* ---------------------------------------------------------------- */
+  /* Gate 2: PageLoad handshake                                        */
+  /* ---------------------------------------------------------------- */
+  const handshakeTimer = setTimeout(() => {
+    setGate("g2", "fail", "PageLoad never fired after 12s — SDK handshake failed in this container");
+    log("DIAGNOSIS: If this happens in Canvas but Stage 1 (standard Detail View) passed, the Canvas iframe context is blocking the SDK handshake. Fallback = Client Script popup launcher.");
+  }, 12000);
+
+  ZOHO.embeddedApp.on("PageLoad", function (data) {
+    clearTimeout(handshakeTimer);
+    log("PageLoad payload: " + JSON.stringify(data));
+    let id = data && data.EntityId;
+    if (Array.isArray(id)) id = id[0];
+    if (!id) { setGate("g2", "fail", "PageLoad fired but no EntityId in payload"); return; }
+    state.recordId = String(id);
+    setGate("g2", "pass", "EntityId " + state.recordId);
+    const rb = document.getElementById("recBadge");
+    rb.className = "badge pass"; rb.textContent = "record " + state.recordId;
+    runFetchGates();
+  });
+
+  ZOHO.embeddedApp.init().then(() => log("embeddedApp.init() resolved"))
+    .catch(e => log("embeddedApp.init() error: " + JSON.stringify(e)));
+}
+
+/* ------------------------------------------------------------------ */
+/* Fetch helpers                                                       */
+/* ------------------------------------------------------------------ */
+function extractArray(resp) {
+  // Responses vary by related list ({data:[...]}, {Emails:[...]}, etc.)
+  if (!resp) return [];
+  if (Array.isArray(resp)) return resp;
+  for (const k of Object.keys(resp)) {
+    if (Array.isArray(resp[k])) return resp[k];
+  }
+  return [];
+}
+
+async function tryRelatedList(name) {
+  const resp = await ZOHO.CRM.API.getRelatedRecords({
+    Entity: "Deals", RecordID: state.recordId,
+    RelatedList: name, page: 1, per_page: 200
+  });
+  return extractArray(resp);
+}
+
+async function fetchGate(gateId, candidates, normalizer) {
+  for (const name of candidates) {
+    try {
+      const rows = await tryRelatedList(name);
+      setGate(gateId, "pass", `RelatedList="${name}" → ${rows.length} record(s)`);
+      log(`  sample keys [${name}]: ` + (rows[0] ? Object.keys(rows[0]).join(", ") : "(empty list — still a PASS: API name valid)"));
+      rows.forEach(r => state.items.push(normalizer(r)));
+      return name;
+    } catch (e) {
+      log(`  RelatedList="${name}" failed: ` + JSON.stringify(e).substr(0, 300));
+    }
+  }
+  setGate(gateId, "fail", `none of [${candidates.join(", ")}] worked — see log`);
+  return null;
+}
+
+const txt = v => (v == null ? "" : String(v));
+function pickDate(r) {
+  return r.Created_Time || r.Modified_Time || r.Sent_Time || r.time || r.Due_Date || r.Call_Start_Time || "";
+}
+
+/* ------------------------------------------------------------------ */
+/* Gates 3–7: the four data types                                      */
+/* ------------------------------------------------------------------ */
+async function runFetchGates() {
+  await fetchGate("g3", ["Notes"], r => ({
+    type: "note", date: pickDate(r),
+    who: r.Created_By ? txt(r.Created_By.name) : "",
+    title: txt(r.Note_Title), body: txt(r.Note_Content)
+  }));
+
+  await fetchGate("g4", ["Attachments"], r => ({
+    type: "file", date: pickDate(r),
+    who: r.Created_By ? txt(r.Created_By.name) : "",
+    title: txt(r.File_Name), body: "Size: " + txt(r.Size)
+  }));
+
+  await fetchGate("g5", ["Emails"], r => ({
+    type: "email", date: pickDate(r),
+    who: txt(r.from && (r.from.email || r.from.user_name)) || txt(r.From),
+    title: txt(r.subject || r.Subject), body: ""
+  }));
+
+  await fetchGate("g6", ["Tasks", "Activities", "Activities_Chronological_View_History"], r => ({
+    type: "task", date: pickDate(r),
+    who: r.Owner ? txt(r.Owner.name) : "",
+    title: txt(r.Subject), body: "Status: " + txt(r.Status)
+  }));
+
+  await fetchGate("g7", ["Calls"], r => ({
+    type: "call", date: pickDate(r),
+    who: r.Owner ? txt(r.Owner.name) : "",
+    title: txt(r.Subject), body: txt(r.Call_Type)
+  }));
+
+  render();
+  document.getElementById("btnNote").disabled = false;
+  document.getElementById("fileInput").disabled = false;
+  document.getElementById("btnFile").disabled = false;
+  log("FETCH GATES COMPLETE. Total timeline items: " + state.items.length);
+  log("Now try the search box, type chips, and sort toggle. Then run write tests 8 & 9.");
+}
+
+/* ------------------------------------------------------------------ */
+/* Gates 8–9: write tests                                              */
+/* ------------------------------------------------------------------ */
+document.getElementById("btnNote").addEventListener("click", async () => {
+  try {
+    const stamp = new Date().toLocaleString();
+    const resp = await ZOHO.CRM.API.addNotes({
+      Entity: "Deals", RecordID: state.recordId,
+      Title: "Activity Hub Test Note",
+      Content: "Inline note written from test widget at " + stamp + ". Safe to delete."
+    });
+    log("addNotes response: " + JSON.stringify(resp).substr(0, 300));
+    const ok = JSON.stringify(resp).indexOf("SUCCESS") !== -1;
+    setGate("g8", ok ? "pass" : "fail", ok ? "note created — verify it appears in record" : "unexpected response, see log");
+  } catch (e) {
+    setGate("g8", "fail", "see log");
+    log("addNotes error: " + JSON.stringify(e));
+  }
+});
+
+document.getElementById("btnFile").addEventListener("click", async () => {
+  const f = document.getElementById("fileInput").files[0];
+  if (!f) { log("Pick a small file first (any .txt or .pdf < 1MB)."); return; }
+  try {
+    const resp = await ZOHO.CRM.API.attachFile({
+      Entity: "Deals", RecordID: state.recordId,
+      File: { Name: f.name, Content: f }
+    });
+    log("attachFile response: " + JSON.stringify(resp).substr(0, 300));
+    const ok = JSON.stringify(resp).indexOf("SUCCESS") !== -1;
+    setGate("g9", ok ? "pass" : "fail", ok ? "file uploaded — verify in record" : "unexpected response, see log");
+  } catch (e) {
+    setGate("g9", "fail", "see log");
+    log("attachFile error: " + JSON.stringify(e));
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* Timeline render + search/filter/sort (the payoff demo)              */
+/* ------------------------------------------------------------------ */
+function render() {
+  const q = document.getElementById("search").value.toLowerCase();
+  let rows = state.items.filter(i =>
+    (state.filter === "all" || i.type === state.filter) &&
+    (!q || (i.title + " " + i.body + " " + i.who).toLowerCase().includes(q))
+  );
+  rows.sort((a, b) => state.sort === "desc"
+    ? txt(b.date).localeCompare(txt(a.date))
+    : txt(a.date).localeCompare(txt(b.date)));
+  const cls = { note: "t-note", email: "t-email", file: "t-file", task: "t-task", call: "t-call" };
+  document.getElementById("timeline").innerHTML = rows.length
+    ? rows.map(i => `<div class="item">
+        <div class="meta"><span class="type ${cls[i.type]}">${i.type.toUpperCase()}</span>${txt(i.date)} · ${txt(i.who)}</div>
+        <div class="body"><b>${txt(i.title)}</b>${i.body ? " — " + txt(i.body) : ""}</div>
+      </div>`).join("")
+    : `<div class="item">No matching items.</div>`;
+}
+
+document.getElementById("search").addEventListener("input", render);
+document.querySelectorAll(".chip[data-f]").forEach(c => c.addEventListener("click", () => {
+  document.querySelectorAll(".chip[data-f]").forEach(x => x.classList.remove("active"));
+  c.classList.add("active");
+  state.filter = c.dataset.f;
+  render();
+}));
+document.getElementById("sortChip").addEventListener("click", function () {
+  state.sort = state.sort === "desc" ? "asc" : "desc";
+  this.textContent = state.sort === "desc" ? "Newest first ▼" : "Oldest first ▲";
+  render();
+});
+
+document.getElementById("btnCopy").addEventListener("click", () => {
+  const gateSummary = GATES.map(g => {
+    const b = document.querySelector(`#${g.id} .badge`).textContent;
+    const d = document.querySelector(`#${g.id} .detail`).textContent;
+    return `${g.label}: ${b}${d ? " — " + d : ""}`;
+  }).join("\n");
+  const full = "=== ACTIVITY HUB TEST RESULTS ===\n" + gateSummary +
+               "\n\n=== LOG ===\n" + state.logLines.join("\n");
+  navigator.clipboard.writeText(full).then(() => log("Diagnostic log copied to clipboard."));
+});
+</script>
+</body>
+</html>
