@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagnoliaMap v3.23 - Find Nearby Providers</title>
+    <title>MagnoliaMap v3.24 - Find Nearby Providers</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCWYDQ2ruxrrYSKZpwVUkI2uhSRjgb-6uU&libraries=geometry"></script>
@@ -59,7 +59,7 @@
     <div id="map"></div>
 
     <script>
-        // === MagnoliaMap v3.23 ===
+        // === MagnoliaMap v3.24 ===
         // Implements spec from MagnoliaMap-CHECKLIST.md (verified 2026-04-29).
         //
         // Changes vs v3.22:
@@ -90,6 +90,7 @@
         const METAIRIE_LA = { lat: 29.9841, lng: -90.1529 }; // Spec 7.3 fallback
         const METAIRIE_ZOOM = 11;                       // Spec 7.6
         const CLAIMANT_ZOOM = 11;                       // Spec 7.6
+        const CITYSTATE_ZOOM = 10;                      // Wider view when only city/state can be geocoded
         const ALT_ZOOM = 12;                            // Spec 7.6
 
         let map, patientMarker, altMarker = null, providerMarkers = [], infoWindow;
@@ -112,7 +113,7 @@
             'PT Direct': '#9932CC'
         };
 
-        function log(msg) { console.log('[MagnoliaMap v3.23]', msg); }
+        function log(msg) { console.log('[MagnoliaMap v3.24]', msg); }
 
         // Quirk 11.2: safe DOM helpers — Google Maps mounts controls async.
         function safeSetText(id, text) {
@@ -272,6 +273,15 @@
             ].filter(Boolean).join(', ');
         }
 
+        // Coarse fallback: city/state/zip only, used when the full street address won't geocode.
+        function buildClaimantCityState(referral) {
+            return [
+                referral.Claimant_City,
+                referral.Claimant_State,
+                referral.Claimant_Zip
+            ].filter(Boolean).join(', ');
+        }
+
         async function plotPatientLocation() {
             const address = buildClaimantAddress(currentReferral);
             log('Constructed claimant address: "' + address + '"');
@@ -290,22 +300,43 @@
                 return;
             }
 
+            // Try the full street address first; if Google can't find it, fall back to
+            // city/state/zip and center there (distances approximate). Only if BOTH fail
+            // do we drop to the regional fallback handled in the catch below.
             try {
-                const result = await geocodeAddress(address);
+                let result, precise;
+                try {
+                    result = await geocodeAddress(address);
+                    precise = true;
+                } catch (streetErr) {
+                    log('Street-level geocode failed: ' + streetErr.message + ' - retrying city/state.');
+                    const cityState = buildClaimantCityState(currentReferral);
+                    if (!cityState) throw streetErr;
+                    result = await geocodeAddress(cityState);
+                    precise = false;
+                    log('Fell back to city/state center: "' + cityState + '"');
+                }
+
                 patientLocation = result.geometry.location;
                 searchCenter = patientLocation;
                 usingFallbackCenter = false;
                 map.setCenter(patientLocation);
-                map.setZoom(CLAIMANT_ZOOM);
+                map.setZoom(precise ? CLAIMANT_ZOOM : CITYSTATE_ZOOM);
 
                 patientMarker = new google.maps.Marker({
-                    position: patientLocation, map: map, title: "Claimant Home",
+                    position: patientLocation, map: map,
+                    title: precise ? "Claimant Home" : "Claimant (approx. - city/state)",
                     icon: { url: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png" },
                     zIndex: 999
                 });
 
-                safeSetText('searchCenterStatus', 'Searching around: Claimant Home');
-                setStatus(`Claimant geocoded: ${patientLocation.lat().toFixed(4)}, ${patientLocation.lng().toFixed(4)}`);
+                if (precise) {
+                    safeSetText('searchCenterStatus', 'Searching around: Claimant Home');
+                    setStatus(`Claimant geocoded: ${patientLocation.lat().toFixed(4)}, ${patientLocation.lng().toFixed(4)}`);
+                } else {
+                    safeSetText('searchCenterStatus', 'Searching around: Claimant city/state (street not found)');
+                    setStatus('Street address not found - centered on city/state. Distances are approximate.', 'warn');
+                }
             } catch (err) {
                 // Spec 7.3: geocode failed → Metairie fallback, no providers plotted.
                 log('Geocoding error: ' + err.message);
@@ -332,7 +363,7 @@
                 const PAGE_SIZE = 200;
                 const MAX_PAGES = 50; // Safety cap: 50 * 200 = 10,000 records
                 const baseQuery =
-                    `select Name, Location_Services_Offered, ` +
+                    `select Name, Category, ` +
                     `Provider_Latitude, Provider_Longitude, ` +
                     `Provider_Address_Street_1, Provider_Address_Street_2, ` +
                     `Provider_Address_City, Provider_Address_State, Provider_Address_Zip, ` +
@@ -380,7 +411,7 @@
         }
 
         function getServiceTypes(p) {
-            let v = p.Location_Services_Offered;
+            let v = p.Category;
             if (!v) return [];
             if (Array.isArray(v)) return v;
             return String(v).split(';').map(s => s.trim()).filter(Boolean);
