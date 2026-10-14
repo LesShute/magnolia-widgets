@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagnoliaMap v3.24 - Find Nearby Providers</title>
+    <title>MagnoliaMap v3.26 - Find Nearby Providers</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCWYDQ2ruxrrYSKZpwVUkI2uhSRjgb-6uU&libraries=geometry"></script>
@@ -59,7 +59,7 @@
     <div id="map"></div>
 
     <script>
-        // === MagnoliaMap v3.24 ===
+        // === MagnoliaMap v3.26 ===
         // Implements spec from MagnoliaMap-CHECKLIST.md (verified 2026-04-29).
         //
         // Changes vs v3.22:
@@ -95,6 +95,7 @@
 
         let map, patientMarker, altMarker = null, providerMarkers = [], infoWindow;
         let currentReferral = {};
+        let currentClaimant = {};
         let patientLocation = null;
         let searchCenter = null;
         let usingFallbackCenter = false; // True when map is centered on Metairie with no real claimant
@@ -113,7 +114,7 @@
             'PT Direct': '#9932CC'
         };
 
-        function log(msg) { console.log('[MagnoliaMap v3.24]', msg); }
+        function log(msg) { console.log('[MagnoliaMap v3.26]', msg); }
 
         // Quirk 11.2: safe DOM helpers — Google Maps mounts controls async.
         function safeSetText(id, text) {
@@ -144,10 +145,29 @@
                 if (resp.data && resp.data[0]) {
                     currentReferral = resp.data[0];
                     log('Referral loaded: ' + (currentReferral.Deal_Name || recordId));
+                    log('Referral keys: ' + Object.keys(currentReferral).join(', '));
+                    await loadClaimantData();
                     initMap();
                 }
             } catch (e) {
                 log('Referral fetch error: ' + JSON.stringify(e));
+            }
+        }
+
+        // Claimant address is mirrored on the Referral (no API value), so read it from the
+        // linked Claimants record (CustomModule2) via the Claimant_Last_First lookup.
+        async function loadClaimantData() {
+            try {
+                const lookup = currentReferral.Claimant_Last_First;
+                if (!lookup || !lookup.id) { log('No Claimant lookup on this referral.'); return; }
+                const resp = await ZOHO.CRM.API.getRecord({ Entity: "CustomModule2", RecordID: lookup.id });
+                if (resp.data && resp.data[0]) {
+                    currentClaimant = resp.data[0];
+                    log('Claimant loaded: ' + (lookup.name || lookup.id));
+                    log('Claimant keys: ' + Object.keys(currentClaimant).join(', '));
+                }
+            } catch (e) {
+                log('Claimant fetch error: ' + JSON.stringify(e));
             }
         }
 
@@ -263,27 +283,28 @@
             });
         }
 
-        // Spec 4.1: claimant address fields on the Deals module.
-        function buildClaimantAddress(referral) {
+        // Claimant address comes from the linked Claimants record (CustomModule2), not the
+        // Referral's mirrored fields (which carry no API value).
+        function buildClaimantAddress(claimant) {
             return [
-                referral.Claimant_St_Address || referral.Claimant_St_Address_1,
-                referral.Claimant_City,
-                referral.Claimant_State,
-                referral.Claimant_Zip
+                claimant.Street_Address || claimant.Street_Address_1,
+                claimant.City,
+                claimant.State,
+                claimant.Zip
             ].filter(Boolean).join(', ');
         }
 
         // Coarse fallback: city/state/zip only, used when the full street address won't geocode.
-        function buildClaimantCityState(referral) {
+        function buildClaimantCityState(claimant) {
             return [
-                referral.Claimant_City,
-                referral.Claimant_State,
-                referral.Claimant_Zip
+                claimant.City,
+                claimant.State,
+                claimant.Zip
             ].filter(Boolean).join(', ');
         }
 
         async function plotPatientLocation() {
-            const address = buildClaimantAddress(currentReferral);
+            const address = buildClaimantAddress(currentClaimant);
             log('Constructed claimant address: "' + address + '"');
 
             const providersPromise = loadProviders();
@@ -310,7 +331,7 @@
                     precise = true;
                 } catch (streetErr) {
                     log('Street-level geocode failed: ' + streetErr.message + ' - retrying city/state.');
-                    const cityState = buildClaimantCityState(currentReferral);
+                    const cityState = buildClaimantCityState(currentClaimant);
                     if (!cityState) throw streetErr;
                     result = await geocodeAddress(cityState);
                     precise = false;
