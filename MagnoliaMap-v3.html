@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>MagnoliaMap v3.27 - Find Nearby Providers</title>
+    <title>MagnoliaMap v3.31 - Find Nearby Providers</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCWYDQ2ruxrrYSKZpwVUkI2uhSRjgb-6uU&libraries=geometry"></script>
@@ -59,7 +59,7 @@
     <div id="map"></div>
 
     <script>
-        // === MagnoliaMap v3.27 ===
+        // === MagnoliaMap v3.31 ===
         // Implements spec from MagnoliaMap-CHECKLIST.md (verified 2026-04-29).
         //
         // Changes vs v3.22:
@@ -104,17 +104,38 @@
         let allProviders = [];
 
         // Spec Section 5: service type → marker color (case-sensitive)
+        // Keys must match the Providers "Category" picklist values exactly.
+        // Filter checkboxes are generated from these keys.
         const SERVICE_COLORS = {
             'Diagnostic Imaging': '#FFD700',
             'DME': '#FF0000',
             'Home Health': '#00AA00',
-            'Home Modification': '#228B22',
-            'Other': '#808080',
-            'Physical Therapy': '#4169E1',
-            'PT Direct': '#9932CC'
+            'Physical Rehabilitation': '#4169E1',
+            'Home Modification': '#FF8C00'
         };
+        // Pins for providers whose Category is blank or not in the list above.
+        const UNCATEGORIZED_COLOR = '#808080';
+        // Search-center markers use purple (not used by any provider category) and
+        // non-circle shapes so they never blend in with provider pins.
+        const SEARCH_CENTER_COLOR = '#7B2CBF';
+        const HOUSE_PATH = 'M 0,-14 L 12,-3 L 8,-3 L 8,10 L -8,10 L -8,-3 L -12,-3 Z';
+        const STAR_PATH  = 'M 0,-14 L 3.5,-4.5 L 13.5,-4.5 L 5.5,1.5 L 8.5,11.5 L 0,5.5 L -8.5,11.5 L -5.5,1.5 L -13.5,-4.5 L -3.5,-4.5 Z';
+        function attachSearchCenterPopup(marker, heading, addressText) {
+            marker.addListener('click', () => {
+                infoWindow.setContent(
+                    `<div class="iw"><h4>${escapeHtml(heading)}</h4>` +
+                    `<div class="iw-row"><span class="val">${escapeHtml(addressText || '(address not available)')}</span></div></div>`);
+                infoWindow.open(map, marker);
+            });
+        }
+        function buildSearchCenterIcon(path) {
+            return {
+                path: path, fillColor: SEARCH_CENTER_COLOR, fillOpacity: 1,
+                strokeColor: '#FFFFFF', strokeWeight: 2, scale: 1.4
+            };
+        }
 
-        function log(msg) { console.log('[MagnoliaMap v3.27]', msg); }
+        function log(msg) { console.log('[MagnoliaMap v3.31]', msg); }
 
         // Quirk 11.2: safe DOM helpers — Google Maps mounts controls async.
         function safeSetText(id, text) {
@@ -221,6 +242,10 @@
                 <div class="control-section">
                     <h4>Filter by Service Type</h4>
                     ${filterRows}
+                    <div class="checkbox-item" style="margin-top:6px;">
+                        <span style="color:#7B2CBF;font-size:14px;margin-right:4px;">&#8962;</span>Claimant home
+                        <span style="color:#7B2CBF;font-size:14px;margin:0 4px 0 10px;">&#9733;</span>Alt. address
+                    </div>
                 </div>
                 <div class="control-section">
                     <h4>Plot Alternative Address</h4>
@@ -358,9 +383,12 @@
                 patientMarker = new google.maps.Marker({
                     position: patientLocation, map: map,
                     title: precise ? "Claimant Home" : "Claimant (approx. - city/state)",
-                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/blue-dot.png" },
+                    icon: buildSearchCenterIcon(HOUSE_PATH),
                     zIndex: 999
                 });
+                attachSearchCenterPopup(patientMarker,
+                    precise ? 'Claimant Home' : 'Claimant (approx. - street not found)',
+                    precise ? address : buildClaimantCityState(currentClaimant));
 
                 if (precise) {
                     safeSetText('searchCenterStatus', 'Searching around: Claimant Home');
@@ -394,15 +422,40 @@
                 // in the database, we MUST paginate via `offset` to fetch them all.
                 const PAGE_SIZE = 200;
                 const MAX_PAGES = 50; // Safety cap: 50 * 200 = 10,000 records
-                const baseQuery =
-                    `select Name, Category, ` +
-                    `Provider_Latitude, Provider_Longitude, ` +
-                    `Provider_Address_Street_1, Provider_Address_Street_2, ` +
-                    `Provider_Address_City, Provider_Address_State, Provider_Address_Zip, ` +
-                    `Provider_Phone, Provider_Fax, Provider_Contract_Type, ` +
-                    `Max_PT_Visit_Rate, Provider_Map_Note ` +
+                // Core fields are confirmed live. Optional popup fields are probed first:
+                // if COQL rejects one (INVALID_QUERY + column_name), it is dropped and logged
+                // instead of breaking the whole provider load.
+                const CORE_FIELDS = [
+                    'Name', 'Category', 'Provider_Latitude', 'Provider_Longitude',
+                    'Provider_Address_Street_1', 'Provider_Address_Street_2',
+                    'Provider_Address_City', 'Provider_Address_State', 'Provider_Address_Zip',
+                    'Provider_Phone', 'Provider_Fax', 'Max_PT_Visit_Rate'
+                ];
+                let optionalFields = [
+                    'Provider_Location_Name', 'Provider_Service_Type', 'Location_Type',
+                    'Provider_Location_Status_', 'Map_Note', 'Provider_Map_Note'
+                ];
+                const buildQuery = () =>
+                    `select ${CORE_FIELDS.concat(optionalFields).join(', ')} ` +
                     `from ${PROVIDERS_MODULE_API_NAME} ` +
                     `where Provider_Latitude is not null and Provider_Longitude is not null`;
+
+                for (let attempt = 0; attempt <= optionalFields.length; attempt++) {
+                    try {
+                        await ZOHO.CRM.API.coql({ select_query: `${buildQuery()} limit 1` });
+                        break;
+                    } catch (probeErr) {
+                        const bad = probeErr && probeErr.details && probeErr.details.column_name;
+                        if (probeErr && probeErr.code === 'INVALID_QUERY' && bad && optionalFields.includes(bad)) {
+                            log(`Popup field "${bad}" not found in ${PROVIDERS_MODULE_API_NAME} - omitted.`);
+                            optionalFields = optionalFields.filter(f => f !== bad);
+                        } else {
+                            throw probeErr;
+                        }
+                    }
+                }
+                log('Provider fields in use: ' + CORE_FIELDS.concat(optionalFields).join(', '));
+                const baseQuery = buildQuery();
 
                 allProviders = [];
                 let page = 0;
@@ -458,7 +511,7 @@
             for (const t of types) {
                 if (SERVICE_COLORS[t]) return SERVICE_COLORS[t];
             }
-            return SERVICE_COLORS['Other'];
+            return UNCATEGORIZED_COLOR;
         }
 
         function buildProviderIcon(color) {
@@ -474,54 +527,46 @@
         // For all others: show label, with placeholder if value is null.
         function renderInfoWindow(p, distMiles) {
             const placeholder = '<span class="placeholder">(not provided)</span>';
+            const has = (val) => val !== null && val !== undefined && val !== '' &&
+                !(Array.isArray(val) && val.length === 0);
+            const fmt = (val) => Array.isArray(val) ? val.join(', ') : String(val);
+            const v = (val) => has(val) ? `<span class="val">${escapeHtml(fmt(val))}</span>` : placeholder;
+            const row = (label, val) => `<div class="iw-row"><span class="label">${label}:</span> ${v(val)}</div>`;
 
-            const v = (val) => (val !== null && val !== undefined && val !== '')
-                ? `<span class="val">${escapeHtml(String(val))}</span>`
-                : placeholder;
-
-            // City/State/Zip combined into one line.
+            const title = p.Provider_Location_Name || p.Name || 'Provider';
             const cityStateZip = [p.Provider_Address_City, p.Provider_Address_State, p.Provider_Address_Zip]
                 .filter(Boolean).join(', ');
-            const cityStateZipDisplay = cityStateZip
-                ? `<span class="val">${escapeHtml(cityStateZip)}</span>`
-                : placeholder;
 
-            // Services list with color dots.
+            // Category drives pin color; shown with matching color dots.
             const types = getServiceTypes(p);
-            const servicesHtml = types.length
+            const categoryHtml = types.length
                 ? types.map(t => {
-                    const c = SERVICE_COLORS[t] || SERVICE_COLORS['Other'];
+                    const c = SERVICE_COLORS[t] || UNCATEGORIZED_COLOR;
                     return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:4px;border:1px solid #666;vertical-align:middle;"></span>${escapeHtml(t)}`;
                 }).join('<br>')
                 : placeholder;
 
-            // Max_PT_Visit_Rate: conditional on non-null.
-            const rateVal = p.Max_PT_Visit_Rate;
-            const rateRow = (rateVal !== null && rateVal !== undefined && rateVal !== '')
-                ? `<div class="iw-row"><span class="label">Max PT Rate:</span> <span class="val">$${escapeHtml(String(rateVal))}</span></div>`
+            // Max PT Visit Rate: row is hidden entirely when blank.
+            const rate = p.Max_PT_Visit_Rate;
+            const rateRow = has(rate)
+                ? `<div class="iw-row"><span class="label">Max PT Visit Rate:</span> <span class="val">$${escapeHtml(String(rate))}</span></div>`
                 : '';
-
-            // Provider_Map_Note: italicized, only render section if populated.
-            const noteVal = p.Provider_Map_Note;
-            const noteHtml = (noteVal !== null && noteVal !== undefined && noteVal !== '')
-                ? `<div class="iw-note">${escapeHtml(String(noteVal))}</div>`
-                : '';
+            const note = has(p.Map_Note) ? p.Map_Note : p.Provider_Map_Note;
 
             return `
                 <div class="iw">
-                    <h4>${escapeHtml(p.Name || 'Provider')}</h4>
-                    <div class="iw-row"><span class="label">Street 1:</span> ${v(p.Provider_Address_Street_1)}</div>
-                    <div class="iw-row"><span class="label">Street 2:</span> ${v(p.Provider_Address_Street_2)}</div>
-                    <div class="iw-row"><span class="label">City/State/ZIP:</span> ${cityStateZipDisplay}</div>
-                    <div class="iw-row"><span class="label">Phone:</span> ${v(p.Provider_Phone)}</div>
-                    <div class="iw-row"><span class="label">Fax:</span> ${v(p.Provider_Fax)}</div>
-                    <div class="iw-row"><span class="label">Contract Type:</span> ${v(p.Provider_Contract_Type)}</div>
+                    <h4>${escapeHtml(title)}</h4>
+                    ${row('Street 1', p.Provider_Address_Street_1)}
+                    ${row('Street 2', p.Provider_Address_Street_2)}
+                    <div class="iw-row"><span class="label">City/State/ZIP:</span> ${cityStateZip ? `<span class="val">${escapeHtml(cityStateZip)}</span>` : placeholder}</div>
+                    ${row('Phone', p.Provider_Phone)}
+                    ${row('Fax', p.Provider_Fax)}
+                    <div class="iw-row"><span class="label">Category:</span> ${categoryHtml}</div>
+                    ${row('Services Provided', p.Provider_Service_Type)}
+                    ${row('Location Type', p.Location_Type)}
+                    ${row('Location Status', p.Provider_Location_Status_)}
                     ${rateRow}
-                    <div class="iw-services">
-                        <span class="label">Services Offered:</span>
-                        ${servicesHtml}
-                    </div>
-                    ${noteHtml}
+                    ${row('Map Note', note)}
                     <div class="iw-distance">${distMiles.toFixed(1)} mi from search center</div>
                 </div>
             `;
@@ -542,9 +587,11 @@
                 if (altMarker) altMarker.setMap(null);
                 altMarker = new google.maps.Marker({
                     position: result.geometry.location, map, title: "Alternative Address",
-                    icon: { url: "http://maps.google.com/mapfiles/ms/icons/green-dot.png" },
+                    icon: buildSearchCenterIcon(STAR_PATH),
                     zIndex: 998
                 });
+                attachSearchCenterPopup(altMarker, 'Alternative Address',
+                    result.formatted_address || addr);
                 map.setCenter(result.geometry.location);
                 map.setZoom(ALT_ZOOM);
 
